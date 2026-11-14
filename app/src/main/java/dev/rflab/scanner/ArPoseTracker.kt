@@ -2,12 +2,16 @@ package dev.rflab.scanner
 
 import android.app.Activity
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import android.view.View
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.CameraConfig
+import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Coordinates2d
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
@@ -18,6 +22,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.atan
 
 /**
  * Optional camera-based 6DoF trajectory logger. ARCore camera images are rendered only for
@@ -42,6 +47,7 @@ class ArPoseTracker(
     private var lastFrameTimestamp = 0L
     private var lastErrorNs = 0L
     private var lastTracking = ""
+    private var cameraIntrinsicsReported = false
     private val quad = createBuffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
     private val uv = createBuffer(FloatArray(8))
 
@@ -64,6 +70,7 @@ class ArPoseTracker(
                 return false
             }
             val newSession = Session(activity)
+            val cameraSelection = selectWidestSupportedRearCamera(newSession)
             visibility = View.VISIBLE
             onResume()
             newSession.resume()
@@ -72,6 +79,8 @@ class ArPoseTracker(
             lastPoseNs = 0L
             lastFrameTimestamp = 0L
             lastTracking = ""
+            cameraIntrinsicsReported = false
+            store.write("ar_camera_config", cameraSelection)
             store.write("ar_session_start", JSONObject()
                 .put("coordinate_frame", "ARCore per-session local world frame, not an RF map")
                 .put("pose_type", "visual_inertial_camera_pose")
@@ -163,6 +172,21 @@ class ArPoseTracker(
             }
             val now = SystemClock.elapsedRealtimeNanos()
             val camera = frame.camera
+            if (!cameraIntrinsicsReported) {
+                cameraIntrinsicsReported = true
+                val intrinsics = camera.imageIntrinsics
+                val dims = intrinsics.imageDimensions
+                val focal = intrinsics.focalLength
+                val actualHfov = if (focal[0] > 0f)
+                    2.0 * atan(dims[0].toDouble() / (2.0 * focal[0])) * 180.0 / Math.PI
+                    else -1.0
+                store.write("ar_camera_intrinsics", JSONObject()
+                    .put("image_width_px", dims[0]).put("image_height_px", dims[1])
+                    .put("fx_px", focal[0].toDouble()).put("fy_px", focal[1].toDouble())
+                    .put("effective_horizontal_fov_deg", actualHfov)
+                    .put("note", "Active ARCore CPU image crop; not necessarily full sensor FoV"))
+                report("ARCore effektives horizontales Kamerasichtfeld: %.1f°".format(actualHfov))
+            }
             val state = camera.trackingState.name
             if (state != lastTracking || now - lastStatusNs > 2_000_000_000L) {
                 lastStatusNs = now
@@ -196,6 +220,65 @@ class ArPoseTracker(
                     .put("message", e.message ?: ""))
             }
         }
+    }
+
+
+    /**
+     * ARCore only allows camera IDs in its own supported-config list.
+     * Prefer the widest rear-camera ID that Camera2 can characterize.
+     * Never use a physical camera through Camera2 while ARCore owns the session.
+     */
+    private fun selectWidestSupportedRearCamera(newSession: Session): JSONObject {
+        val result = JSONObject().put("preference", "widest_ARCore_supported_rear_camera")
+        try {
+            val configs = newSession.getSupportedCameraConfigs(
+                CameraConfigFilter(newSession).setFacingDirection(CameraConfig.FacingDirection.BACK))
+            val cameraManager = activity.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val samples = JSONArray()
+            var best: CameraConfig? = null
+            var bestFov = Double.NEGATIVE_INFINITY
+            val defaultId = newSession.cameraConfig.cameraId
+            var defaultFov = Double.NEGATIVE_INFINITY
+            for (config in configs) {
+                val horizontalFov = try {
+                    val ch = cameraManager.getCameraCharacteristics(config.cameraId)
+                    val physical = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    val focals = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    if (physical != null && focals != null && focals.isNotEmpty()) {
+                        val f = focals.filter { it > 0f }.minOrNull() ?: 0f
+                        if (f > 0f) 2.0 * atan(physical.width / (2.0 * f)) * 180.0 / Math.PI
+                        else Double.NaN
+                    } else Double.NaN
+                } catch (_: Exception) { Double.NaN }
+                samples.put(JSONObject().put("camera_id", config.cameraId)
+                    .put("image_width", config.imageSize.width)
+                    .put("image_height", config.imageSize.height)
+                    .put("estimated_horizontal_fov_deg", if (horizontalFov.isFinite()) horizontalFov else JSONObject.NULL))
+                if (config.cameraId == defaultId && horizontalFov.isFinite()) defaultFov = horizontalFov
+                if (horizontalFov.isFinite() && horizontalFov > bestFov) {
+                    bestFov = horizontalFov
+                    best = config
+                }
+            }
+            // A wide-angle change must be significant; unknown or logical camera IDs retain ARCore's default.
+            val chooseWide = best != null && best!!.cameraId != defaultId &&
+                bestFov > (if (defaultFov.isFinite()) defaultFov + 10.0 else 90.0)
+            if (chooseWide) newSession.cameraConfig = best!!
+            val selected = newSession.cameraConfig
+            result.put("supported_configs", samples)
+                .put("available_config_count", configs.size)
+                .put("default_camera_id", defaultId)
+                .put("selected_camera_id", selected.cameraId)
+                .put("wide_config_selected", chooseWide)
+                .put("selection_note", if (chooseWide) "Widest supported ARCore camera selected"
+                    else "Retaining default ARCore camera; no proven wider supported rear ID")
+            report("ARCore Kamera-ID: ${selected.cameraId}; Ultraweitwinkel ${if (chooseWide) "ausgewählt" else "nicht als separate ARCore-Kamera bestätigt"}")
+        } catch (e: Exception) {
+            result.put("selection_error", e.message ?: e.javaClass.simpleName)
+            result.put("selected_camera_id", newSession.cameraConfig.cameraId)
+            report("ARCore Kameraauswahl: Standardmodus (${e.javaClass.simpleName})")
+        }
+        return result
     }
 
     private fun drawPreview() {
