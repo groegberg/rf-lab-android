@@ -108,7 +108,9 @@ class SurveyMapView(context: Context) : View(context) {
         val originZ = if (validPositions.isNotEmpty()) validPositions.map { it.z }.average().toFloat() else 0f
 
         val allXY = validPositions.map { Pair(it.x, it.z) } +
-            active.mapNotNull { it.pose?.let { pose -> Pair(pose.x, pose.z) } }
+            active.mapNotNull { it.pose?.let { pose -> Pair(pose.x, pose.z) } } +
+            (if (showDepth) visibleCloud.filterIndexed { i, _ -> i % 16 == 0 }
+                .map { Pair(it.x, it.z) } else emptyList())
         val widthM = if (allXY.isNotEmpty()) (allXY.maxOf { it.first } - allXY.minOf { it.first }) else 2f
         val heightM = if (allXY.isNotEmpty()) (allXY.maxOf { it.second } - allXY.minOf { it.second }) else 2f
         val maxExtent = max(2.5f, max(widthM, heightM) * 1.45f)
@@ -251,7 +253,11 @@ class SurveyMapView(context: Context) : View(context) {
         canvas.drawText(if (is3d) "3D · isometrisch" else "2D · Draufsicht", 13f * density, 24f * density, paint)
         paint.color = Color.rgb(151, 174, 196)
         paint.textSize = 10.5f * density
-        canvas.drawText("ARCore-Koordinaten · Meter · 2 Finger: Zoom", 13f * density, 43f * density, paint)
+        canvas.drawText("ARCore-Lokalraum · Meter · Pinch: Zoom", 13f * density, 43f * density, paint)
+        if (poses.any { it.run != newestRun }) {
+            canvas.drawText("Nur letzter Tracking-Lauf; andere nicht ausgerichtet", 13f * density,
+                59f * density, paint)
+        }
         if (validPositions.isEmpty()) {
             paint.color = Color.rgb(203, 216, 227)
             paint.textSize = 14f * density
