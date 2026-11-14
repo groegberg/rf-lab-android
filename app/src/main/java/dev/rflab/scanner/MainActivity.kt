@@ -402,6 +402,8 @@ class MainActivity : Activity(), SensorEventListener {
             action("Archiv öffnen", { showArchive(false) }),
             action("JSONL exportieren", { exportJsonl() }, true)
         ), marginTop = 8)
+        if (recording && !ar.isTrackingActive) addVertical(page,
+            action("ARCore-Tracking erneut starten", { startAr() }), marginTop = 8)
         messageLine("3D ist eine isometrische Darstellung echter Messpositionen. Die Signalinterpolation " +
             "ist eine geschätzte 2D-Oberfläche, kein Radar oder volumetrisches RF-Imaging.")
     }
@@ -502,6 +504,8 @@ class MainActivity : Activity(), SensorEventListener {
             action("Draufsicht", { map?.is3d = false; map?.invalidate() }),
             action("Zentrieren", { map?.resetView() })
         ), marginTop = 12)
+        if (recording && !ar.isTrackingActive) addVertical(page,
+            action("ARCore-Tracking erneut starten", { startAr() }), marginTop = 8)
         messageLine("Die ARCore-Koordinaten sind pro Session lokal. Es gibt noch keine " +
             "automatische Registrierung verschiedener Raummessfahrten oder geschlossene Wand-Meshes.")
     }
