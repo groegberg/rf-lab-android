@@ -132,15 +132,21 @@ class MainActivity : Activity(), SensorEventListener {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == permissionCode) log(if (permitted()) "Berechtigungen OK" else "Berechtigungen fehlen")
+        if (requestCode == permissionCode) {
+            log(if (permitted()) "Berechtigungen OK" else "Berechtigungen fehlen")
+            capabilities()
+        }
     }
 
     private fun ensureSession() {
-        if (!store.isRecording) store.start()
+        if (!store.isRecording) {
+            store.start()
+            store.write("capabilities", capabilityPayload())
+        }
         status.text = "Messdatei: ${store.currentFile?.name}"
     }
 
-    private fun capabilities() {
+    private fun capabilityPayload(): JSONObject {
         val pm = packageManager
         val record = JSONObject()
             .put("manufacturer", Build.MANUFACTURER)
@@ -162,12 +168,17 @@ class MainActivity : Activity(), SensorEventListener {
                 .put("name", s?.name ?: ""))
         }
         record.put("sensors", inventory)
+        return record
+    }
+
+    private fun capabilities() {
         ensureSession()
+        val record = capabilityPayload()
         store.write("capabilities", record)
         log("Hardware: ${Build.MODEL}, Android API ${Build.VERSION.SDK_INT}")
         log("WLAN 2,4=${wifi.is24GHzBandSupported}, 5=${wifi.is5GHzBandSupported}, 6=${wifi.is6GHzBandSupported}")
         log("RTT=${rtt?.isAvailable == true} · UWB-Chip=${pm.hasSystemFeature("android.hardware.uwb")}")
-        log("Sensoren: ${inventory.length()} geprüft")
+        log("Sensoren: ${record.getJSONArray("sensors").length()} geprüft")
     }
 
     private fun startWifiScan() {
@@ -286,12 +297,14 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun stopMotion() {
+        if (!recording) return
         recording = false
         sensors.unregisterListener(this)
         handler.removeCallbacks(linkSampler)
-        store.stop()
-        status.text = "Aufzeichnung beendet"
-        log("Aufzeichnung gestoppt")
+        store.write("motion_stop", JSONObject())
+        store.flush()
+        status.text = "IMU gestoppt – Session bleibt für Export geöffnet"
+        log("IMU gestoppt. WLAN/RTT und Marker können weiterhin in dieselbe Session geschrieben werden.")
     }
 
     private fun exportJsonl() {
@@ -321,6 +334,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onDestroy() {
         stopMotion()
+        store.stop()
         if (receiverActive) unregisterReceiver(wifiReceiver)
         super.onDestroy()
     }
