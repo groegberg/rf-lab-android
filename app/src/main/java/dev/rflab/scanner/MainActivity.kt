@@ -316,6 +316,8 @@ class MainActivity : Activity(), SensorEventListener {
                 " räumliche RF-Werte  ·  " + scanCount + " Scans\n" + infoLog
         else data.title + "  ·  " + poseCount + " Posen  ·  " +
             radioCount + " räumliche RF-Werte\n" + infoLog
+        if (recording && manualOnly) headerStatus.append(
+            System.lineSeparator() + manual.selectedDescription())
         previewShell.visibility = if (recording && ar.isTrackingActive) View.VISIBLE else View.GONE
     }
 
@@ -857,6 +859,9 @@ class MainActivity : Activity(), SensorEventListener {
             action("Archiv öffnen", { showArchive(false) })
         ), marginTop = 8)
         addVertical(page, settings, marginBottom = 12)
+        if (!recording) addVertical(page, action("Kamera-freien Nachtmodus öffnen", {
+            switchTab(4)
+        }), marginBottom = 12)
 
         val info = card("DATEN & DATENSCHUTZ")
         addVertical(info, text("Kein Root · Keine Internetberechtigung · Keine CSI-/I/Q-Rohdaten.",
@@ -1027,7 +1032,16 @@ class MainActivity : Activity(), SensorEventListener {
             val payload = JSONObject().put("updated", fresh).put("aps", aps)
             data.addScan(payload, t)
             if (recording && store.isRecording) store.write("wifi_scan", payload)
+            if (recording && manualOnly && manual.collecting) {
+                var newRows = 0
+                for (ap in results) {
+                    val row = manual.addScan(ap, t, fresh)
+                    if (row != null) { writeManualReading(row); newRows++ }
+                }
+                if (newRows > 0) manual.persist()
+            }
             lastScanTimeNs = t
+            if (recording && manualOnly && currentTab == 4 && fresh) renderTab()
             infoLog = results.size.toString() + " APs, " +
                 (if (fresh) "neuer Scan" else "zwischengespeicherte Daten")
             if (!recording) renderTab()
@@ -1058,6 +1072,10 @@ class MainActivity : Activity(), SensorEventListener {
             val time = SystemClock.elapsedRealtimeNanos()
             if (recording && store.isRecording) store.write("wifi_link", payload)
             data.addLink(payload, time)
+            if (recording && manualOnly) {
+                manual.addLink(time, link.bssid ?: "", link.ssid ?: "",
+                    link.frequency, link.rssi)?.let { writeManualReading(it) }
+            }
         } catch (e: Exception) { infoLog = "WLAN-Link: " + e.javaClass.simpleName }
     }
 
@@ -1174,7 +1192,19 @@ class MainActivity : Activity(), SensorEventListener {
     @Deprecated("Uses platform activity result callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, result: Intent?) {
         super.onActivityResult(requestCode, resultCode, result)
-        if (requestCode != exportCode || resultCode != RESULT_OK) return
+        if (resultCode != RESULT_OK) return
+        if (requestCode == csvExportCode) {
+            try {
+                val target = result?.data ?: return
+                contentResolver.openOutputStream(target)?.use {
+                    it.write(manual.exportCsv().toByteArray(Charsets.UTF_8))
+                } ?: error("CSV-Ziel nicht verfügbar")
+                infoLog = "Manuelle WLAN-Karte als CSV exportiert."
+            } catch (e: Exception) { infoLog = "CSV-Export: " + e.javaClass.simpleName }
+            updateStatus()
+            return
+        }
+        if (requestCode != exportCode) return
         val target = result?.data ?: return
         val source = lastFile ?: return
         try {
