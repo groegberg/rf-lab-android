@@ -71,6 +71,13 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var store: SessionStore
     private lateinit var ar: ArPoseTracker
     private lateinit var fingerprints: FingerprintLibrary
+    private lateinit var manual: ManualSurvey
+    private var manualMap: ManualMapView? = null
+    private var manualStatus: TextView? = null
+    private var manualBssid = ""
+    private var manualOnly = false
+    private var lowLightSinceMs = 0L
+    private var lastTrackingMs = 0L
     private var data = SurveyData()
     private var baseline: SurveyData? = null
     private var recording = false
@@ -92,16 +99,17 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var previewShell: LinearLayout
     private lateinit var navigation: LinearLayout
 
-    private val tabs = listOf("KARTE", "MESH", "RAUM", "INDOOR", "EXPERTEN")
+    private val tabs = listOf("KARTE", "MESH", "RAUM", "INDOOR", "NACHT", "EXPERTEN")
     private val permissionCode = 170
     private val cameraCode = 171
     private val exportCode = 172
+    private val csvExportCode = 173
 
     private val scanTask = object : Runnable {
         override fun run() {
             if (!recording) return
             requestScan()
-            handler.postDelayed(this, if (fastScans) 10_000 else 35_000)
+            handler.postDelayed(this, if (fastScans || manualOnly) 10_000 else 35_000)
         }
     }
     private val linkTask = object : Runnable {
@@ -115,6 +123,10 @@ class MainActivity : Activity(), SensorEventListener {
         override fun run() {
             updateStatus()
             if (currentTab == 0 || currentTab == 2) map?.update(data, selectedBssid)
+            if (currentTab == 4) {
+                manualMap?.invalidate()
+                manualStatus?.text = manual.selectedDescription()
+            }
             uiCount++
             handler.postDelayed(this, 1100)
         }
@@ -140,13 +152,27 @@ class MainActivity : Activity(), SensorEventListener {
         wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         fingerprints = FingerprintLibrary(this)
+        manual = ManualSurvey(this)
+        manual.loadLatest()
         store = SessionStore(this)
         ar = ArPoseTracker(this, this, store,
             { message -> runOnUiThread {
                 infoLog = message
+                if (recording && !manualOnly && message.contains("INSUFFICIENT_LIGHT")) {
+                    if (lowLightSinceMs == 0L) lowLightSinceMs = SystemClock.elapsedRealtime()
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lowLightSinceMs >= 9_000L &&
+                        now - lastTrackingMs >= 9_000L) fallbackToManual()
+                } else if (message.contains("ARCore TRACKING")) {
+                    lowLightSinceMs = 0L
+                }
                 updateStatus()
             } },
-            { pose, t -> data.addPose(pose, t) },
+            { pose, t ->
+                data.addPose(pose, t)
+                if (pose.optString("state") == "TRACKING")
+                    lastTrackingMs = SystemClock.elapsedRealtime()
+            },
             { cloud, _ -> data.addDepth(cloud) }
         )
         buildShell()
@@ -243,7 +269,7 @@ class MainActivity : Activity(), SensorEventListener {
         val heading = stack()
         heading.setPadding(dp(5), dp(5), dp(5), dp(6))
         addVertical(heading, text("RF LAB  /  FIELD STUDIO", 21f, light, true))
-        addVertical(heading, text("3D-Funkfeld · Mesh · Raum · Indoor", 11.5f, muted), 2)
+        addVertical(heading, text("Funkfeld · Mesh · Raum · Indoor · Nachtmodus", 11.5f, muted), 2)
         root.addView(heading)
 
         val capture = card()
@@ -279,7 +305,8 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun updateStatus() {
         if (!::headerStatus.isInitialized) return
-        topButton.text = if (recording) "Messfahrt beenden und speichern" else "Neue Messfahrt starten"
+        topButton.text = if (recording) "Messfahrt beenden und speichern"
+            else if (currentTab == 4) "Ohne Kamera messen" else "Neue Messfahrt starten"
         topButton.background = rounded(if (recording) orange else accent, 12)
         val poseCount = data.snapshotPoses().size
         val radioCount = data.positionedCount()
@@ -316,12 +343,15 @@ class MainActivity : Activity(), SensorEventListener {
         if (!::page.isInitialized) return
         page.removeAllViews()
         map = null
+        manualMap = null
+        manualStatus = null
         drawNav()
         when (currentTab) {
             0 -> renderMapPage()
             1 -> renderMeshPage()
             2 -> renderRoomPage()
             3 -> renderIndoorPage()
+            4 -> renderManualPage()
             else -> renderExpertPage()
         }
     }
@@ -675,6 +705,13 @@ class MainActivity : Activity(), SensorEventListener {
         }
         pendingSurvey = false
         val identifier = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMAN).format(Date())
+        manualOnly = currentTab == 4
+        lowLightSinceMs = 0L
+        lastTrackingMs = SystemClock.elapsedRealtime()
+        if (manualOnly) {
+            manual.start("Nachtmessung " + identifier)
+            manualBssid = ""
+        }
         data = SurveyData().apply { reset("Messfahrt " + identifier) }
         selectedBssid = ""
         baseline = null
@@ -682,8 +719,9 @@ class MainActivity : Activity(), SensorEventListener {
         lastFile = store.currentFile
         store.write("survey_start", JSONObject()
             .put("mode", "field_studio")
-            .put("version", "0.3.0")
-            .put("local_frame", "ARCore per-session local")
+            .put("version", "0.3.1")
+            .put("capture_mode", if (manualOnly) "manual_user_placed" else "arcore_optional")
+            .put("local_frame", if (manualOnly) "user-defined 2D meters" else "ARCore per-session local")
             .put("requested_wifi_interval_ms", if (fastScans) 10000 else 35000))
         recording = true
         sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
@@ -695,7 +733,9 @@ class MainActivity : Activity(), SensorEventListener {
         handler.post(scanTask)
         handler.post(linkTask)
         infoLog = "Messfahrt läuft. WLAN-Daten werden erfasst."
-        if (checkSelfPermission(Manifest.permission.CAMERA) ==
+        if (manualOnly) {
+            infoLog = "Nachtmodus aktiv. Tippe auf den Grundriss und bleibe am Messpunkt."
+        } else if (checkSelfPermission(Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED) {
             startAr()
         } else {
@@ -720,7 +760,10 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(linkTask)
         sensorManager.unregisterListener(this)
         ar.stop()
+        if (manualOnly) manual.finish()
         store.write("survey_stop", JSONObject()
+            .put("manual_points", manual.allPoints().size)
+            .put("manual_samples", if (manualOnly) manual.count() else 0)
             .put("poses", data.snapshotPoses().size)
             .put("positioned_radios", data.positionedCount())
             .put("depth_points", data.geometryCount()))
@@ -742,7 +785,7 @@ class MainActivity : Activity(), SensorEventListener {
             if (recording && store.isRecording) {
                 store.write("wifi_scan_request", JSONObject()
                     .put("accepted", allowed)
-                    .put("requested_interval_ms", if (fastScans) 10000 else 35000))
+                    .put("requested_interval_ms", if (fastScans || manualOnly) 10000 else 35000))
             }
             data.scanRequests++
             if (allowed) data.acceptedScanRequests++
