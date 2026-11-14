@@ -53,6 +53,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val permissionCode = 110
     private val exportCode = 120
     private val cameraPermCode = 121
+    private var pendingCameraSweep = false
     private var wifiLinkMisses = 0
 
     private val wifiReceiver = object : BroadcastReceiver() {
@@ -115,6 +116,8 @@ class MainActivity : Activity(), SensorEventListener {
         button("8. JSONL exportieren") { exportJsonl() }
         button("9. ARCore 6DoF starten") { startArTracking() }
         button("10. ARCore stoppen") { if (::arPose.isInitialized) arPose.stop() }
+        button("11. Alle ARCore-Kamera-Configs testen (~63s)") { startArConfigTest() }
+        button("12. WLAN-Kanalübersicht abfragen") { ensureSession(); requestChannelSurvey() }
         arPose = ArPoseTracker(this, this, store) { message -> runOnUiThread { log(message) } }
         root.addView(arPose, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, (260 * resources.displayMetrics.density).toInt()))
@@ -155,6 +158,17 @@ class MainActivity : Activity(), SensorEventListener {
         arPose.start()
     }
 
+    private fun startArConfigTest() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingCameraSweep = true
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraPermCode)
+            return
+        }
+        pendingCameraSweep = false
+        ensureSession()
+        arPose.startCameraSweep()
+    }
+
     private fun requestPerms() {
         val requests = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= 33) requests.add(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -171,9 +185,12 @@ class MainActivity : Activity(), SensorEventListener {
             log(if (permitted()) "Berechtigungen OK" else "Berechtigungen fehlen")
             capabilities()
         } else if (requestCode == cameraPermCode) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)
-                startArTracking()
-            else log("ARCore benötigt Kamera-Berechtigung; WLAN/IMU funktionieren weiterhin.")
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (pendingCameraSweep) startArConfigTest() else startArTracking()
+            } else {
+                pendingCameraSweep = false
+                log("ARCore benötigt Kamera-Berechtigung; WLAN/IMU funktionieren weiterhin.")
+            }
         }
     }
 
@@ -226,6 +243,8 @@ class MainActivity : Activity(), SensorEventListener {
         if (!permitted()) { log("Zuerst Berechtigungen erteilen"); return }
         try {
             val ok = wifi.startScan()
+            store.write("wifi_scan_request", JSONObject().put("accepted", ok)
+                .put("note", "Acceptance does not guarantee fresh scan results"))
             log(if (ok) "WLAN Scan gestartet" else "Scan gedrosselt/nicht gestartet – Cache wird gelesen")
             if (!ok) showScan(false)
         } catch (e: Exception) { log("WLAN Fehler: ${e.message}") }
@@ -275,6 +294,8 @@ class MainActivity : Activity(), SensorEventListener {
                     .put("frequency_mhz", ap.frequency)
                     .put("rssi_dbm", ap.level)
                     .put("rssi_valid", ap.level in -110..-1)
+                    .put("scan_age_ms", (android.os.SystemClock.elapsedRealtimeNanos() - ap.timestamp * 1000L) / 1_000_000.0)
+                    .put("security_types", JSONArray().apply { ap.securityTypes.forEach { put(it) } })
                     .put("channel_width_code", ap.channelWidth)
                     .put("wifi_standard_code", ap.wifiStandard)
                     .put("seen_t_ns", ap.timestamp * 1000L)
@@ -289,9 +310,33 @@ class MainActivity : Activity(), SensorEventListener {
                     .put("beacon_ies", beaconElementsToJson(ap)))
             }
             store.write("wifi_scan", JSONObject().put("updated", fresh).put("aps", aps))
+            requestChannelSurvey()
             log("WLAN: ${latestScan.size} APs, ${latestScan.count { isRtt(it) }} RTT-fähig")
             for (ap in latestScan.take(10)) log("${ap.SSID} · ${ap.frequency} MHz · ${ap.level} dBm")
         } catch (e: Exception) { log("ScanResult Fehler: ${e.message}") }
+    }
+
+    private fun requestChannelSurvey() {
+        if (Build.VERSION.SDK_INT < 34 || !permitted()) return
+        try {
+            wifi.getChannelData(mainExecutor) { channels ->
+                val rows = JSONArray()
+                for (bundle in channels) {
+                    rows.put(JSONObject()
+                        .put("frequency_mhz", bundle.getInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ))
+                        .put("ap_count", bundle.getInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP)))
+                }
+                store.write("wifi_channel_ap_counts", JSONObject()
+                    .put("channels", rows)
+                    .put("source", "most_recent_scan")
+                    .put("not_channel_busy_fraction", true))
+                log("WLAN-Kanalübersicht: ${rows.length()} Frequenzen")
+            }
+        } catch (e: Exception) {
+            store.write("wifi_channel_survey_error", JSONObject()
+                .put("type", e.javaClass.simpleName).put("message", e.message ?: ""))
+            log("Kanalübersicht nicht verfügbar: ${e.javaClass.simpleName}")
+        }
     }
 
     private fun measureRtt() {
@@ -391,6 +436,10 @@ class MainActivity : Activity(), SensorEventListener {
                     .put("tx_speed_mbps", info.txLinkSpeedMbps)
                     .put("rx_speed_mbps", info.rxLinkSpeedMbps)
                     .put("wifi_standard", info.wifiStandard)
+                    .put("security_type", info.currentSecurityType)
+                    .put("max_supported_tx_mbps", info.maxSupportedTxLinkSpeedMbps)
+                    .put("max_supported_rx_mbps", info.maxSupportedRxLinkSpeedMbps)
+                    .put("supplicant_state", info.supplicantState.name)
                     .put("ap_mld_mac", info.apMldMacAddress?.toString() ?: "")
                     .put("mlo_link_id", info.apMloLinkId)
                     .put("mlo_associated_links", mloLinksToJson(info.associatedMloLinks))
