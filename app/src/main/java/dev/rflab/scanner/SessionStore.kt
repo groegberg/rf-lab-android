@@ -23,7 +23,7 @@ class SessionStore(private val context: Context) {
     @Synchronized
     fun start(): File {
         if (writer != null) return currentFile!!
-        val formatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT)
+        val formatter = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.ROOT)
         formatter.timeZone = TimeZone.getTimeZone("UTC")
         val dir = context.getExternalFilesDir(null) ?: context.filesDir
         val file = File(dir, "rflab_${formatter.format(Date())}.jsonl")
