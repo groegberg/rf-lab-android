@@ -207,7 +207,7 @@ class MainActivity : Activity(), SensorEventListener {
             text = label
             textSize = 12.5f
             isAllCaps = false
-            setTextColor(if (prominent) background else light)
+            setTextColor(if (prominent) this@MainActivity.background else light)
             background = rounded(if (prominent) accent else surfaceBright, 12)
             setPadding(dp(8), dp(7), dp(8), dp(7))
             minHeight = dp(43)
@@ -269,7 +269,7 @@ class MainActivity : Activity(), SensorEventListener {
         addVertical(root, barScroll, marginBottom = 8)
 
         val contentScroll = ScrollView(this)
-        contentScroll.fillViewport = false
+        contentScroll.isFillViewport = false
         page = stack()
         page.setPadding(dp(2), dp(4), dp(2), dp(18))
         contentScroll.addView(page)
@@ -630,7 +630,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         val name = EditText(this).apply {
             hint = "z. B. Küche / Schreibtisch"
-            singleLine = true
+            isSingleLine = true
             setTextColor(Color.BLACK)
         }
         AlertDialog.Builder(this).setTitle("Indoor-Referenzort speichern")
