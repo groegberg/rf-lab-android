@@ -70,3 +70,69 @@ Only if ADB/standard APIs identify a plausible route, use *another test device* 
 ## Important scientific distinction
 
 Raw 802.11 monitor mode frames = MAC-layer packets, not radio I/Q or per-subcarrier CSI. UWB FiRa CIR diagnostics are sampled/channel-related data from a ranging link when exposed; do not equate them with passive radar images. Bluetooth PBR phase correction terms relate to two active peers, not necessarily to arbitrary reflective object imaging.
+
+## 2026-11-14 follow-up: what root can and cannot unlock
+
+**Root is a permission escalation, not a firmware feature switch.** It can provide shell access to driver ioctls, some device nodes, logging, tracing and vendor HAL files, but cannot create unimplemented IQ or CSI export functionality.
+
+### (A) Broadcom Wi-Fi driver: actual low-level CSI debug structures
+
+AOSP publishes a BCM4398-specific Broadcom driver source tree with `include/ftm_ioctl.h` and `include/bcmerror.h`. The related Broadcom FTM header (publicly inspectable in the BCM4383 family tree) defines:
+
+- `WL_FTM_EVENT_CSI_DUMP = 22`, explicitly described as a raw CSI dump for debugging;
+- `WL_FTM_TLV_ID_CSI_DUMP = 1037`, `wl_ftm_csi_dump_t` with variable-length sample payload;
+- `CSI_DUMP_FLAG_RX_CSI_DATA`, `CSI_DUMP_FLAG_PASSIVE_STA`;
+- `WL_FTM_TLV_ID_TIMESTAMP_DUMP_V1 = 1041`, and four timestamp fields for FTM sessions;
+- a CSI ranging parameter structure and related 802.11az debug events.
+
+The BCM4398-specific `bcmerror.h` also contains `WL_FTM_E_NO_CSI_DATA` and `WL_FTM_E_PHY_CSI_FATAL_ERR`. This points to a relevant potential driver/firmware pathway. However, **the CSI definitions have not yet been checked directly in the precise BCM4398 revision shipped on the user's November 2026 Android 17 build**, and **no live CSI output has been verified**. Some header features may be compiled out, diagnostic-only, or require negotiated 802.11az/FTM ranging with a cooperating peer. An unsupported AP cannot be turned into an FTM responder by rooting only the phone.
+
+The `wondertap` native monitor mechanism reported for Pixel 10/BCM4398 is intended for `mosey`/Quick Share 802.11 action frames. With root, it may be possible to observe or control the monitor interface. **It is not a CSI dump and does not inherently include PHY-level amplitude/phase or arbitrary Wi-Fi traffic.**
+
+Research order after root:
+1. Record firmware/driver version and check stock kernel header matching the exact device build;
+2. Identify available driver ioctls, tracepoints and debug event IDs without making firmware modifications;
+3. Determine whether `proxd`/FTM CSI TLVs are really supported, and whether a licensed consenting FTM peer is required;
+4. Only then prototype a constrained read-only capture and validate that payload is complex CSI rather than diagnostic counters.
+
+Official source references:
+- BCM4398 AOSP driver source: https://android.googlesource.com/kernel/google-modules/wlan/bcmdhd/bcm4398/+/refs/tags/android-16.0.0_r0.0
+- Broadcom FTM example header: https://android.googlesource.com/kernel/google-modules/wlan/bcmdhd/bcm4383/+/3b1a081640892e16ac658f66a0b0d026735922fe/include/ftm_ioctl.h
+- BCM4398 CSI-related error codes: https://android.googlesource.com/kernel/google-modules/wlan/bcmdhd/bcm4398/+/refs/tags/android-16-beta-2_r0.4/include/bcmerror.h
+
+### (B) UWB CIR: Android HAL and UCI packet structure
+
+The Android HAL documents `SUPPORTED_DIAGNOSTICS=0xE7` (UWB vendor capability), `ENABLE_DIAGNOSTICS=0xE8` (session config), `DIAGRAMS_FRAME_REPORTS_FIELDS=0xE9` (session config), with the CIR reporting bit `0x04`. `ANDROID_RANGE_DIAGNOSTICS` is available only if supported. The AOSP Rust UCI packet definition contains `CirValue` including first path / peak path data and a variable `sample_window` byte array. This is *not* proof that Pixel 10 firmware exposes CIR or that the raw values are calibrated for imaging.
+
+Root would help inspect HAL capabilities, implementation-specific diagnostics, and UCI message transport. A UWB-compatible peer and active ranging session may be required. SELinux and HAL service exclusivity remain obstacles even for root. Do **not** send untested raw UCI control commands to the radio as a first experiment.
+
+Official sources:
+- https://source.android.com/docs/core/connect/uwb-hal-interface
+- https://android.googlesource.com/platform/external/uwb/+/f6b8908a080cc359e8a0a11ada390c20fde674bd/src/rust/uwb_uci_packets/uci_packets.pdl
+
+### (C) Bluetooth Channel Sounding: HCI without root first
+
+The Bluetooth SIG documents `LE CS Subevent Result` and `LE CS Subevent Result Continue`, including step-specific measurements such as phase correction and timing. Android Bluetooth HCI snoop logs can be created via Developer Options and a bugreport on production devices. Phase-related step data should only be expected if the phone **and its counterpart** actually support and operate Bluetooth Channel Sounding. Root may make the snoop file easier to access; it is not necessarily required.
+
+- https://www.bluetooth.com/channel-sounding-tech-overview/
+- https://source.android.com/docs/core/connect/bluetooth/verifying_debugging
+
+### (D) Root boot/update risks and prudent decision
+
+Magisk's official method requires an unlocked bootloader and a matching patched firmware image; Android GKI devices generally use `init_boot`. Unlocking wipes data. Google's Pixel factory image documentation specifically warns that the May 2026 Pixel 10 bootloader update raised an anti-rollback index, forbidding downgrade to earlier vulnerable builds. Do **not** flash an older Pixel 10 image or someone else's modified boot image. An incorrect flash can cause a bootloop or require a full restore; a rooted/unlocked device can lose some app security/integrity functions. Rooting for RF Lab is **not recommended until non-rooted capability checks have been examined**.
+
+- https://github.com/topjohnwu/Magisk/blob/master/docs/install.md
+- https://developers.google.com/android/images
+
+### Decision matrix
+
+| Payload | Likelihood of reaching data with root | Additional blocker |
+| --- | --- | --- |
+| Raw/monitor 802.11 frames | plausible on BCM4398 / wondertap | interface, privileges, support for desired frame types |
+| CSI (complex per-subcarrier) | plausible research lead, unconfirmed | running firmware debug FTM/CSI event, potentially compatible 802.11az peer |
+| FTM four-way timestamps / RTT debug | plausible, unconfirmed | firmware implementation and compatible FTM responder |
+| UWB CIR | official framework data format, device support unconfirmed | diagnostic capability, UWB peer, privileged HAL |
+| Bluetooth CS phase terms | possible WITHOUT root | actual CS hardware capability and peer |
+| continuous baseband I/Q | no verified stock Pixel extractor | custom firmware or external SDR |
+
+**Never equate "public struct exists" with "data works on this Pixel."** The first experiment should be read-only inventory on a stock device (driver/firmware modules; UWB/Bluetooth capabilities) before evaluating whether to dedicate a research Pixel to root.
