@@ -24,7 +24,7 @@ data class SurveyRadio(
     val rssi: Int, val origin: String, val pose: SurveyPose?
 )
 
-data class SurveyDepth(val x: Float, val y: Float, val z: Float, val confidence: Float)
+data class SurveyDepth(val x: Float, val y: Float, val z: Float, val confidence: Float, val run: Int = 0)
 
 data class ApStats(
     val bssid: String, var ssid: String, var frequency: Int,
@@ -104,7 +104,7 @@ class SurveyData {
     @Synchronized fun addDepth(points: List<SurveyDepth>) {
         if (points.isEmpty()) return
         if (depth.size >= 24000) depth.subList(0, min(depth.size, 2000)).clear()
-        depth.addAll(points.take(260))
+        depth.addAll(points.take(260).map { it.copy(run = arRun) })
     }
 
     @Synchronized fun nearestPose(atNs: Long, maxGapNs: Long = 600_000_000L): SurveyPose? {
