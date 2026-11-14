@@ -28,6 +28,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.view.View
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.FileInputStream
@@ -39,6 +40,7 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var store: SessionStore
     private lateinit var logView: TextView
     private lateinit var status: TextView
+    private lateinit var arPose: ArPoseTracker
     private val history = ArrayDeque<String>()
     private val handler = Handler(Looper.getMainLooper())
     private var latestScan: List<ScanResult> = emptyList()
@@ -47,6 +49,8 @@ class MainActivity : Activity(), SensorEventListener {
     private val autoScanIntervalMs = 35_000L
     private val permissionCode = 110
     private val exportCode = 120
+    private val cameraPermCode = 121
+    private var wifiLinkMisses = 0
 
     private val wifiReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -106,6 +110,15 @@ class MainActivity : Activity(), SensorEventListener {
             log("Messpunkt markiert")
         }
         button("8. JSONL exportieren") { exportJsonl() }
+        button("9. ARCore 6DoF starten") { startArTracking() }
+        button("10. ARCore stoppen") { if (::arPose.isInitialized) arPose.stop() }
+        arPose = ArPoseTracker(this, this, store) { message -> runOnUiThread { log(message) } }
+        root.addView(arPose, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, (260 * resources.displayMetrics.density).toInt()))
+        root.addView(TextView(this).apply {
+            text = "ARCore zeigt nur das Kamerabild zur Orientierung. Im Export werden ausschließlich die Kamera-Posen protokolliert, keine Bilder."
+            textSize = 12f
+        })
         logView = TextView(this).apply { textSize = 12f; setTextIsSelectable(true) }
         root.addView(logView)
         val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
@@ -130,6 +143,15 @@ class MainActivity : Activity(), SensorEventListener {
         (Build.VERSION.SDK_INT < 33 ||
             checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED)
 
+    private fun startArTracking() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraPermCode)
+            return
+        }
+        ensureSession()
+        arPose.start()
+    }
+
     private fun requestPerms() {
         val requests = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= 33) requests.add(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -145,6 +167,10 @@ class MainActivity : Activity(), SensorEventListener {
         if (requestCode == permissionCode) {
             log(if (permitted()) "Berechtigungen OK" else "Berechtigungen fehlen")
             capabilities()
+        } else if (requestCode == cameraPermCode) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+                startArTracking()
+            else log("ARCore benötigt Kamera-Berechtigung; WLAN/IMU funktionieren weiterhin.")
         }
     }
 
@@ -215,6 +241,7 @@ class MainActivity : Activity(), SensorEventListener {
                     .put("bssid", ap.BSSID)
                     .put("frequency_mhz", ap.frequency)
                     .put("rssi_dbm", ap.level)
+                    .put("rssi_valid", ap.level in -110..-1)
                     .put("channel_width_code", ap.channelWidth)
                     .put("wifi_standard_code", ap.wifiStandard)
                     .put("seen_t_ns", ap.timestamp * 1000L)
@@ -297,17 +324,44 @@ class MainActivity : Activity(), SensorEventListener {
     private fun logConnectedWifi() {
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val nc = cm.getNetworkCapabilities(cm.activeNetwork)
-            val info = nc?.transportInfo as? WifiInfo
-            if (nc?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && info != null) {
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            val defaultOnWifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            var info: WifiInfo? = if (defaultOnWifi) caps?.transportInfo as? WifiInfo else null
+            var source = "active_network"
+            // Public but deprecated fallback: useful for diagnosing Android 16/17 WiFiInfo redaction.
+            if (info == null || info.frequency <= 0) {
+                @Suppress("DEPRECATION")
+                val legacy = wifi.connectionInfo
+                if (legacy != null && legacy.networkId >= 0 && legacy.frequency > 0) {
+                    info = legacy
+                    source = "legacy_wifi_manager"
+                }
+            }
+            if (info != null && info.frequency > 0 && info.rssi in -110..-1) {
+                wifiLinkMisses = 0
                 store.write("wifi_link", JSONObject()
+                    .put("source", source)
                     .put("rssi_dbm", info.rssi)
                     .put("bssid", info.bssid ?: "")
+                    .put("ssid", info.ssid ?: "")
                     .put("frequency_mhz", info.frequency)
                     .put("tx_speed_mbps", info.txLinkSpeedMbps)
                     .put("rx_speed_mbps", info.rxLinkSpeedMbps))
+            } else {
+                wifiLinkMisses++
+                if (wifiLinkMisses == 1 || wifiLinkMisses % 10 == 0) {
+                    store.write("wifi_link_diagnostic", JSONObject()
+                        .put("wifi_enabled", wifi.isWifiEnabled)
+                        .put("default_network_wifi", defaultOnWifi)
+                        .put("status", "no_connected_wifi_link_or_redacted_info")
+                        .put("source", source))
+                    if (wifiLinkMisses == 1) log("Kein WLAN-Link-Sample: Bitte tatsächlich mit einem WLAN verbinden.")
+                }
             }
-        } catch (e: Exception) { log("Link-Fehler: ${e.message}") }
+        } catch (e: Exception) {
+            store.write("wifi_link_error", JSONObject().put("message", e.message ?: ""))
+            log("Link-Fehler: ${e.message}")
+        }
     }
 
     private fun stopMotion() {
@@ -345,6 +399,11 @@ class MainActivity : Activity(), SensorEventListener {
             output.use { destination -> FileInputStream(file).use { it.copyTo(destination) } }
             log("Export OK: ${file.name}")
         } catch (e: Exception) { log("Export fehlgeschlagen: ${e.message}") }
+    }
+
+    override fun onPause() {
+        if (::arPose.isInitialized) arPose.stop()
+        super.onPause()
     }
 
     override fun onDestroy() {
