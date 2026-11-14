@@ -146,7 +146,7 @@ class DiagnosticsActivity : Activity(), SensorEventListener {
                 log("WLAN-Scanintervall: ${autoScanIntervalMs / 1000} s; Schnellmodus für deaktivierte Android-Scan-Drosselung")
             }
         })
-        arPose = ArPoseTracker(this, this, store) { message -> runOnUiThread { log(message) } }
+        arPose = ArPoseTracker(this, this, store, report = { message -> runOnUiThread { log(message) } })
         root.addView(arPose, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, (260 * resources.displayMetrics.density).toInt()))
         root.addView(TextView(this).apply {
