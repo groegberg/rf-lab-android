@@ -104,6 +104,8 @@ class MainActivity : Activity(), SensorEventListener {
     private val cameraCode = 171
     private val exportCode = 172
     private val csvExportCode = 173
+    private val importCode = 174
+    private val spatialCsvCode = 175
 
     private val scanTask = object : Runnable {
         override fun run() {
@@ -421,6 +423,13 @@ class MainActivity : Activity(), SensorEventListener {
             " verortete WLAN-Werte  ·  " + data.freshScans + " frische Scans", 13f, light))
         addVertical(stats, text(if (count < 6) "Für eine Heatmap mehrere Meter bewegen; sonst nur echte Punkte sichtbar."
             else "Heatmap nur nahe gemessenen Punkten; ungemessene Bereiche bleiben frei.", 11.5f, muted), 6)
+        val lastScanAge = if (lastScanTimeNs > 0L)
+            (SystemClock.elapsedRealtimeNanos() - lastScanTimeNs) / 1_000_000_000L else -1L
+        addVertical(stats, text(
+            "Scanqualität: " + data.freshScans + "/" +
+            (data.freshScans + data.staleScans) + " aktualisiert" +
+            if (lastScanAge >= 0L) " · letzte Rückmeldung vor " + lastScanAge + " s" else "",
+            11.5f, muted), marginTop = 7)
         addVertical(page, stats, marginBottom = 12)
         addMapSelector()
         addMap(false, false)
@@ -433,7 +442,13 @@ class MainActivity : Activity(), SensorEventListener {
             action("Archiv öffnen", { showArchive(false) }),
             action("JSONL exportieren", { exportJsonl() }, true)
         ), marginTop = 8)
-        if (recording && !ar.isTrackingActive) addVertical(page,
+        addVertical(page, rowOf(
+            action("JSONL importieren", { importJsonl() }),
+            action("3D-WLAN CSV", { exportSpatialCsv() })
+        ), marginTop = 8)
+        if (recording && !manualOnly) addVertical(page,
+            action("Ohne Kamera weitermessen", { fallbackToManual() }), marginTop = 8)
+        if (recording && !manualOnly && !ar.isTrackingActive) addVertical(page,
             action("ARCore-Tracking erneut starten", { startAr() }), marginTop = 8)
         messageLine("3D ist eine isometrische Darstellung echter Messpositionen. Die Signalinterpolation " +
             "ist eine geschätzte 2D-Oberfläche, kein Radar oder volumetrisches RF-Imaging.")
@@ -858,6 +873,10 @@ class MainActivity : Activity(), SensorEventListener {
             action("JSONL exportieren", { exportJsonl() }),
             action("Archiv öffnen", { showArchive(false) })
         ), marginTop = 8)
+        addVertical(settings, rowOf(
+            action("JSONL importieren", { importJsonl() }),
+            action("3D-WLAN CSV", { exportSpatialCsv() })
+        ), marginTop = 8)
         addVertical(page, settings, marginBottom = 12)
         if (!recording) addVertical(page, action("Kamera-freien Nachtmodus öffnen", {
             switchTab(4)
@@ -965,7 +984,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun startAr() {
         if (!recording || ar.isTrackingActive) return
         data.newArRun()
-        if (!ar.start()) infoLog = "ARCore nicht gestartet; WLAN-only-Messung aktiv."
+        if (!ar.start()) fallbackToManual()
         updateStatus()
     }
 
@@ -1107,7 +1126,7 @@ class MainActivity : Activity(), SensorEventListener {
         } else if (requestCode == cameraCode) {
             if (results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED)
                 startAr()
-            else infoLog = "WLAN-only-Modus: Kamera wurde nicht erlaubt."
+            else fallbackToManual()
         }
         updateStatus()
     }
@@ -1171,6 +1190,99 @@ class MainActivity : Activity(), SensorEventListener {
         }.start()
     }
 
+
+    private fun importJsonl() {
+        if (recording) {
+            Toast.makeText(this, "Bitte Messfahrt vor dem Import beenden.", Toast.LENGTH_LONG).show()
+            return
+        }
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }, importCode)
+    }
+
+    private fun handleImportedJsonl(uri: android.net.Uri) {
+        infoLog = "Messdatei wird geprüft und importiert."
+        updateStatus()
+        Thread {
+            val dest = File(getExternalFilesDir(null) ?: filesDir,
+                "rflab_import_" + System.currentTimeMillis() + ".jsonl")
+            try {
+                contentResolver.openInputStream(uri)?.use { src ->
+                    dest.outputStream().use { out ->
+                        val buffer = ByteArray(16384)
+                        var total = 0L
+                        while (true) {
+                            val n = src.read(buffer)
+                            if (n < 0) break
+                            total += n
+                            if (total > 80L * 1024L * 1024L) error("Datei größer als 80 MB")
+                            out.write(buffer, 0, n)
+                        }
+                    }
+                } ?: error("Datei nicht zugänglich")
+                val valid = dest.bufferedReader().use { reader ->
+                    var found = false
+                    repeat(20) {
+                        val line = reader.readLine() ?: return@repeat
+                        try {
+                            if (JSONObject(line).has("type") && JSONObject(line).has("payload"))
+                                found = true
+                        } catch (_: Exception) {}
+                    }
+                    found
+                }
+                if (!valid) error("Keine RF Lab JSONL-Datensätze erkannt")
+                runOnUiThread {
+                    infoLog = "Importiert: " + dest.name
+                    loadSession(dest)
+                }
+            } catch (e: Exception) {
+                dest.delete()
+                runOnUiThread {
+                    infoLog = "Import fehlgeschlagen: " + (e.message ?: e.javaClass.simpleName)
+                    updateStatus()
+                }
+            }
+        }.start()
+    }
+
+    private fun spatialCsvText(): String {
+        val csv = StringBuilder("t_ns;source;ssid;bssid;frequency_mhz;rssi_dbm;ar_run;x_m;y_m;z_m\n")
+        fun safe(value: String) = "\"" + value.replace("\"", "\"\"") + "\""
+        for (r in data.snapshotRadios()) {
+            csv.append(r.timeNs).append(';').append(safe(r.origin)).append(';')
+                .append(safe(r.ssid)).append(';').append(safe(r.bssid)).append(';')
+                .append(r.frequency).append(';').append(r.rssi).append(';')
+            val p = r.pose
+            if (p != null) {
+                csv.append(p.run).append(';')
+                    .append(String.format(Locale.ROOT, "%.4f", p.x)).append(';')
+                    .append(String.format(Locale.ROOT, "%.4f", p.y)).append(';')
+                    .append(String.format(Locale.ROOT, "%.4f", p.z))
+            } else csv.append(";;;;")
+            csv.append('\n')
+        }
+        return csv.toString()
+    }
+
+    private fun exportSpatialCsv() {
+        if (recording) {
+            Toast.makeText(this, "Vor dem CSV-Export Messfahrt beenden.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (data.snapshotRadios().isEmpty()) {
+            Toast.makeText(this, "Keine WLAN-Messungen zum Export vorhanden.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/csv"
+            putExtra(Intent.EXTRA_TITLE, "rf_lab_spatial_wifi.csv")
+        }, spatialCsvCode)
+    }
+
     private fun exportJsonl() {
         if (recording) {
             Toast.makeText(this, "Bitte Messfahrt vor dem Export beenden.", Toast.LENGTH_SHORT).show()
@@ -1193,6 +1305,21 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onActivityResult(requestCode: Int, resultCode: Int, result: Intent?) {
         super.onActivityResult(requestCode, resultCode, result)
         if (resultCode != RESULT_OK) return
+        if (requestCode == importCode) {
+            result?.data?.let { handleImportedJsonl(it) }
+            return
+        }
+        if (requestCode == spatialCsvCode) {
+            try {
+                val target = result?.data ?: return
+                contentResolver.openOutputStream(target)?.use { out ->
+                    out.write(spatialCsvText().toByteArray(Charsets.UTF_8))
+                } ?: error("CSV-Ziel nicht zugänglich")
+                infoLog = "Räumliche WLAN-Messwerte als CSV exportiert."
+            } catch (e: Exception) { infoLog = "CSV-Export: " + e.javaClass.simpleName }
+            updateStatus()
+            return
+        }
         if (requestCode == csvExportCode) {
             try {
                 val target = result?.data ?: return
