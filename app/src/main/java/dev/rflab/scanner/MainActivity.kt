@@ -177,7 +177,7 @@ class MainActivity : Activity(), SensorEventListener {
         store.write("capabilities", record)
         log("Hardware: ${Build.MODEL}, Android API ${Build.VERSION.SDK_INT}")
         log("WLAN 2,4=${wifi.is24GHzBandSupported}, 5=${wifi.is5GHzBandSupported}, 6=${wifi.is6GHzBandSupported}")
-        log("RTT=${rtt?.isAvailable == true} · UWB-Chip=${pm.hasSystemFeature("android.hardware.uwb")}")
+        log("RTT=${rtt?.isAvailable == true} · UWB-Chip=${record.getBoolean("uwb_feature")}")
         log("Sensoren: ${record.getJSONArray("sensors").length()} geprüft")
     }
 
