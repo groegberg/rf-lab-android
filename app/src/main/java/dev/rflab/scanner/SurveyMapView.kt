@@ -143,11 +143,11 @@ class SurveyMapView(context: Context) : View(context) {
         }
 
         // IDW interpolation is intentionally local: no fabricated global room coverage.
-        if (!is3d && heatmap) {
+        if (!is3d && heatmap && selectedBssid.isNotBlank()) {
             val dots = active.mapNotNull { item ->
                 val p = item.pose
                 if (p != null) Triple(p.x, p.z, item.rssi) else null
-            }.takeLast(1200)
+            }.takeLast(220)
             val spreadX = if (dots.isNotEmpty()) dots.maxOf { it.first } - dots.minOf { it.first } else 0f
             val spreadZ = if (dots.isNotEmpty()) dots.maxOf { it.second } - dots.minOf { it.second } else 0f
             if (dots.size >= 6 && spreadX > .35f && spreadZ > .35f) {
@@ -155,23 +155,31 @@ class SurveyMapView(context: Context) : View(context) {
                 val xmax = dots.maxOf { it.first }
                 val zmin = dots.minOf { it.second }
                 val zmax = dots.maxOf { it.second }
-                val stepM = max(.12f, max(spreadX, spreadZ) / 26f)
+                val stepM = max(.14f, max(spreadX, spreadZ) / 21f)
                 val cell = stepM * pixelsPerMeter
                 var z = zmin
                 while (z <= zmax) {
                     var x = xmin
                     while (x <= xmax) {
-                        val neighbors = dots.map { dot ->
+                        var nearestD2 = Float.MAX_VALUE
+                        var weightedSignal = 0.0
+                        var totalWeight = 0.0
+                        var contributing = 0
+                        for (dot in dots) {
                             val ddx = dot.first - x
                             val ddz = dot.second - z
-                            Pair(ddx * ddx + ddz * ddz, dot.third)
-                        }.sortedBy { it.first }.take(8)
-                        if (neighbors.size >= 3 && neighbors[0].first < .65f * .65f) {
-                            val mean = neighbors.fold(Pair(0.0, 0.0)) { acc, item ->
-                                val ww = 1.0 / (item.first + .035)
-                                Pair(acc.first + item.second * ww, acc.second + ww)
+                            val d2 = ddx * ddx + ddz * ddz
+                            if (d2 < nearestD2) nearestD2 = d2
+                            if (d2 < 1.4f * 1.4f) {
+                                val ww = 1.0 / (d2 + .035)
+                                weightedSignal += dot.third * ww
+                                totalWeight += ww
+                                contributing++
                             }
-                            val color = colorForRssi((mean.first / mean.second).toInt())
+                        }
+                        if (contributing >= 3 && nearestD2 < .65f * .65f &&
+                            totalWeight > 0.0) {
+                            val color = colorForRssi((weightedSignal / totalWeight).toInt())
                             val coord = project(x, originY, z)
                             paint.style = Paint.Style.FILL
                             paint.color = Color.argb(70, Color.red(color), Color.green(color), Color.blue(color))
