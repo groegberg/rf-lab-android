@@ -44,6 +44,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var latestScan: List<ScanResult> = emptyList()
     private var recording = false
     private var receiverActive = false
+    private val autoScanIntervalMs = 35_000L
     private val permissionCode = 110
     private val exportCode = 120
 
@@ -59,6 +60,15 @@ class MainActivity : Activity(), SensorEventListener {
             if (!recording) return
             logConnectedWifi()
             handler.postDelayed(this, 1000L)
+        }
+    }
+
+    private val autoWifiScanner = object : Runnable {
+        override fun run() {
+            if (!recording) return
+            if (permitted()) startWifiScan()
+            else log("Automatischer WLAN-Scan: Berechtigung fehlt")
+            handler.postDelayed(this, autoScanIntervalMs)
         }
     }
 
@@ -88,8 +98,8 @@ class MainActivity : Activity(), SensorEventListener {
         button("2. Hardware prüfen") { capabilities() }
         button("3. WLAN Scan (2,4/5/6 GHz)") { ensureSession(); startWifiScan() }
         button("4. WiFi RTT messen") { ensureSession(); measureRtt() }
-        button("5. IMU-Aufzeichnung starten") { startMotion() }
-        button("6. IMU-Aufzeichnung stoppen") { stopMotion() }
+        button("5. Messfahrt starten (IMU + WLAN)") { startMotion() }
+        button("6. Messfahrt stoppen") { stopMotion() }
         button("7. Messpunkt markieren") {
             ensureSession()
             store.write("marker", JSONObject().put("label", "manual marker"))
@@ -261,10 +271,13 @@ class MainActivity : Activity(), SensorEventListener {
             val sensor = sensors.getDefaultSensor(id)
             if (sensor != null && sensors.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)) count++
         }
-        store.write("motion_start", JSONObject().put("sensor_count", count))
+        store.write("motion_start", JSONObject()
+            .put("sensor_count", count)
+            .put("auto_wifi_scan_interval_ms", autoScanIntervalMs))
         handler.post(linkSampler)
-        status.text = "IMU-Aufzeichnung läuft"
-        log("IMU gestartet: $count Sensoren")
+        handler.post(autoWifiScanner)
+        status.text = "Messfahrt läuft: IMU + WLAN"
+        log("Messfahrt gestartet: $count Sensoren; WLAN-Scan alle 35s (Android-Throttling möglich)")
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -289,6 +302,7 @@ class MainActivity : Activity(), SensorEventListener {
             if (nc?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && info != null) {
                 store.write("wifi_link", JSONObject()
                     .put("rssi_dbm", info.rssi)
+                    .put("bssid", info.bssid ?: "")
                     .put("frequency_mhz", info.frequency)
                     .put("tx_speed_mbps", info.txLinkSpeedMbps)
                     .put("rx_speed_mbps", info.rxLinkSpeedMbps))
@@ -301,6 +315,7 @@ class MainActivity : Activity(), SensorEventListener {
         recording = false
         sensors.unregisterListener(this)
         handler.removeCallbacks(linkSampler)
+        handler.removeCallbacks(autoWifiScanner)
         store.write("motion_stop", JSONObject())
         store.flush()
         status.text = "IMU gestoppt – Session bleibt für Export geöffnet"
