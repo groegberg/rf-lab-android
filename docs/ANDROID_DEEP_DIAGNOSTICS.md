@@ -1,6 +1,6 @@
 # RF Lab — camera and networking diagnostics
 
-## RF Lab 0.2.2: all ARCore configurations
+## RF Lab 0.2.3: all ARCore configurations
 
 1. In a well-lit indoor room, start the app, enable camera permission.
 2. Tap **11. Alle ARCore-Kamera-Configs testen (~63s)**.
@@ -44,7 +44,7 @@ The exact `dumpsys` fields and availability are implementation-dependent. They c
 
 **Privacy warning:** dumpsys, logcat, and bugreports can contain nearby Wi-Fi BSSIDs, network names, device IDs, location-related data, and application logs. Review and redact before sharing. Never paste credentials, full bugreports, or other personal data into a public issue.
 
-## Additional public API logs in RF Lab 0.2.2
+## Additional public API logs in RF Lab 0.2.3
 
 - `wifi_scan_request`: whether the OS accepted each scan request.
 - `wifi_scan`: per-BSSID RSSI, radio frequency, MLO, information elements, security types, scan age.
@@ -52,3 +52,9 @@ The exact `dumpsys` fields and availability are implementation-dependent. They c
 - `wifi_link`: connected AP signal, link rates, security type, supported link rates, MLO metadata, when permitted.
 
 For deeper RF measurements, use a compatible device with documented CSI or SDR access. No phone developer toggle can grant a privileged measurement API that the firmware does not expose.
+
+## Optional faster scans (v0.2.3)
+
+The button **13. WLAN-Schnellscan: AN (10 s)** changes RF Lab's automatic foreground scan request interval from 35 seconds to 10 seconds. This is intended for controlled experiments **only after disabling Android's Wi-Fi scan throttling** in Developer Options. The OS may still reject scans; `wifi_scan_request.accepted` and `wifi_scan.updated` should be compared with `scan_age_ms` before treating observations as new measurements.
+
+RF Lab also registers `WifiManager.RSSI_CHANGED_ACTION` and records `wifi_rssi_event` if the OS sends it while a motion session is active. These are already-computed WLAN signal-strength estimates, not raw PHY channel data or a guaranteed fixed-rate measurement.
