@@ -2,6 +2,7 @@ package dev.rflab.scanner
 
 import android.content.Context
 import android.net.wifi.ScanResult
+import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -30,12 +31,14 @@ class ManualSurvey(private val context: Context) {
     private val readings = arrayListOf<ManualReading>()
     private val lastScanT = mutableMapOf<Pair<Int, String>, Long>()
     private var file: File? = null
+    private var captureSinceNs = 0L
 
     @Synchronized fun start(title: String) {
         label = title
         points.clear(); readings.clear(); lastScanT.clear()
         selectedId = null
         collecting = false
+        captureSinceNs = 0L
         file = File(context.filesDir, "manual_survey_" + System.currentTimeMillis() + ".json")
         persist()
     }
@@ -53,6 +56,7 @@ class ManualSurvey(private val context: Context) {
         points.add(p)
         selectedId = p.id
         collecting = true
+        captureSinceNs = SystemClock.elapsedRealtimeNanos()
         persist()
         return p
     }
@@ -61,12 +65,14 @@ class ManualSurvey(private val context: Context) {
         if (points.none { it.id == id }) return
         selectedId = id
         collecting = false // no measurements while physically moving to next point
+        captureSinceNs = 0L
         persist()
     }
 
     @Synchronized fun record(value: Boolean): Boolean {
         if (value && selectedId == null) return false
         collecting = value
+        captureSinceNs = if (value) SystemClock.elapsedRealtimeNanos() else 0L
         persist()
         return true
     }
@@ -84,7 +90,8 @@ class ManualSurvey(private val context: Context) {
     @Synchronized fun addScan(ap: ScanResult, nowNs: Long, fresh: Boolean): ManualReading? {
         if (!fresh) return null
         val timestamp = ap.timestamp * 1000L
-        if (timestamp <= 0 || abs(nowNs - timestamp) > 2_500_000_000L) return null
+        if (timestamp <= 0 || timestamp < captureSinceNs ||
+            abs(nowNs - timestamp) > 2_500_000_000L) return null
         val id = selectedId ?: return null
         val key = Pair(id, ap.BSSID ?: "")
         if (timestamp <= (lastScanT[key] ?: 0L)) return null
@@ -97,7 +104,7 @@ class ManualSurvey(private val context: Context) {
     private fun add(time: Long, bssid: String, ssid: String, freq: Int,
                     rssi: Int, source: String): ManualReading? {
         val id = selectedId
-        if (!collecting || id == null || rssi !in -110..-1 || freq <= 0 ||
+        if (!collecting || id == null || time < captureSinceNs || rssi !in -110..-1 || freq <= 0 ||
             bssid.isBlank() || bssid == "02:00:00:00:00:00") return null
         val row = ManualReading(id, time, bssid, ssid, freq, rssi, source)
         readings.add(row)
