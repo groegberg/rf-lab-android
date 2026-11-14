@@ -48,6 +48,19 @@ class ArPoseTracker(
     private var lastErrorNs = 0L
     private var lastTracking = ""
     private var cameraIntrinsicsReported = false
+    private var sweepRequested = false
+    private var sweepRunning = false
+    private var sweepConfigs: List<CameraConfig> = emptyList()
+    private var sweepIndex = 0
+    private var sweepStartNs = 0L
+    private var sweepLastCameraFrame = 0L
+    private var sweepFirstCameraFrame = 0L
+    private var sweepUniqueFrames = 0
+    private var sweepTrackingFrames = 0
+    private var sweepFirstTrackingNs = 0L
+    private var sweepErrors = 0
+    private var sweepActualIntrinsics: JSONObject? = null
+    private val sweepDurationNs = 7_000_000_000L
     private val quad = createBuffer(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
     private val uv = createBuffer(FloatArray(8))
 
@@ -61,6 +74,15 @@ class ArPoseTracker(
         visibility = View.GONE
     }
 
+    fun startCameraSweep(): Boolean {
+        if (running) {
+            report("ARCore läuft bereits. Zuerst ARCore stoppen, dann den Kameratest starten.")
+            return false
+        }
+        sweepRequested = true
+        return start()
+    }
+
     fun start(): Boolean {
         if (running) return true
         try {
@@ -71,6 +93,18 @@ class ArPoseTracker(
             }
             val newSession = Session(activity)
             val cameraSelection = selectWidestSupportedRearCamera(newSession)
+            if (sweepRequested) {
+                sweepConfigs = newSession.getSupportedCameraConfigs(
+                    CameraConfigFilter(newSession).setFacingDirection(CameraConfig.FacingDirection.BACK))
+                if (sweepConfigs.isEmpty()) {
+                    sweepRequested = false
+                    newSession.close()
+                    report("ARCore-Kameratest: keine unterstützten Rückkamera-Konfigurationen.")
+                    return false
+                }
+                newSession.cameraConfig = sweepConfigs[0]
+                newSession.configure(newSession.config)
+            }
             visibility = View.VISIBLE
             onResume()
             newSession.resume()
@@ -80,6 +114,17 @@ class ArPoseTracker(
             lastFrameTimestamp = 0L
             lastTracking = ""
             cameraIntrinsicsReported = false
+            sweepRunning = sweepRequested
+            sweepRequested = false
+            if (sweepRunning) {
+                sweepIndex = 0
+                resetSweepCounters(SystemClock.elapsedRealtimeNanos())
+                store.write("ar_camera_sweep_start", JSONObject()
+                    .put("config_count", sweepConfigs.size)
+                    .put("seconds_per_config", sweepDurationNs / 1.0e9)
+                    .put("note", "Each config is applied and tested sequentially; local ARCore world map can reset"))
+                report("ARCore-Kameratest: ${sweepConfigs.size} Konfigurationen, je 7 Sekunden. Kamera ruhig auf strukturierte Szene richten.")
+            }
             store.write("ar_camera_config", cameraSelection)
             store.write("ar_session_start", JSONObject()
                 .put("coordinate_frame", "ARCore per-session local world frame, not an RF map")
@@ -90,6 +135,8 @@ class ArPoseTracker(
             return true
         } catch (e: Exception) {
             running = false
+            sweepRunning = false
+            sweepRequested = false
             session?.close()
             session = null
             visibility = View.GONE
@@ -100,6 +147,13 @@ class ArPoseTracker(
 
     fun stop() {
         if (!running && session == null) return
+        if (sweepRunning) {
+            store.write("ar_camera_sweep_stop", JSONObject()
+                .put("completed_configs", sweepIndex)
+                .put("cancelled", true))
+        }
+        sweepRunning = false
+        sweepRequested = false
         running = false
         val old = session
         session = null
@@ -172,6 +226,7 @@ class ArPoseTracker(
             }
             val now = SystemClock.elapsedRealtimeNanos()
             val camera = frame.camera
+            if (sweepRunning) recordSweepFrame(frame.timestamp, camera.trackingState, now, camera.imageIntrinsics)
             if (!cameraIntrinsicsReported) {
                 cameraIntrinsicsReported = true
                 val intrinsics = camera.imageIntrinsics
@@ -212,12 +267,18 @@ class ArPoseTracker(
                 store.write("ar_pose", record)
             }
         } catch (e: Exception) {
+            if (sweepRunning) sweepErrors++
             val now = SystemClock.elapsedRealtimeNanos()
             if (now - lastErrorNs > 3_000_000_000L) {
                 lastErrorNs = now
                 report("ARCore-Framefehler: ${e.javaClass.simpleName}: ${e.message}")
                 store.write("ar_error", JSONObject().put("error", e.javaClass.simpleName)
                     .put("message", e.message ?: ""))
+            }
+        } finally {
+            if (sweepRunning && running &&
+                SystemClock.elapsedRealtimeNanos() - sweepStartNs >= sweepDurationNs) {
+                advanceSweep()
             }
         }
     }
