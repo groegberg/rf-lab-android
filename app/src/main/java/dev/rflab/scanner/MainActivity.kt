@@ -83,6 +83,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastFile: File? = null
     private var uiCount = 0
     private var lastScanTimeNs = 0L
+    private var pendingSurvey = false
+    private var pendingOneShotScan = false
 
     private lateinit var headerStatus: TextView
     private lateinit var topButton: Button
@@ -663,9 +665,11 @@ class MainActivity : Activity(), SensorEventListener {
     private fun startSurvey() {
         if (recording) return
         if (!wifiAllowed()) {
+            pendingSurvey = true
             requestWifiPermissions()
             return
         }
+        pendingSurvey = false
         val identifier = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMAN).format(Date())
         data = SurveyData().apply { reset("Messfahrt " + identifier) }
         selectedBssid = ""
@@ -723,7 +727,12 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun requestScan() {
-        if (!wifiAllowed()) { requestWifiPermissions(); return }
+        if (!wifiAllowed()) {
+            pendingOneShotScan = true
+            requestWifiPermissions()
+            return
+        }
+        pendingOneShotScan = false
         try {
             val allowed = wifi.startScan()
             if (recording && store.isRecording) {
@@ -808,9 +817,17 @@ class MainActivity : Activity(), SensorEventListener {
         super.onRequestPermissionsResult(requestCode, permissions, results)
         if (requestCode == permissionCode) {
             if (wifiAllowed()) {
-                if (!recording) startSurvey()
-                else requestScan()
-            } else infoLog = "WLAN-Zugriff benötigt Standort- und WLAN-Berechtigungen."
+                val shouldSurvey = pendingSurvey
+                val shouldScan = pendingOneShotScan
+                pendingSurvey = false
+                pendingOneShotScan = false
+                if (shouldSurvey) startSurvey()
+                else if (shouldScan) requestScan()
+            } else {
+                pendingSurvey = false
+                pendingOneShotScan = false
+                infoLog = "WLAN-Zugriff benötigt Standort- und WLAN-Berechtigungen."
+            }
         } else if (requestCode == cameraCode) {
             if (results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED)
                 startAr()
