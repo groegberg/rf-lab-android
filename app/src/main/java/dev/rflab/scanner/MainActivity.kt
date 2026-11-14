@@ -115,7 +115,6 @@ class MainActivity : Activity(), SensorEventListener {
         override fun run() {
             updateStatus()
             if (currentTab == 0 || currentTab == 2) map?.update(data, selectedBssid)
-            if (recording && (currentTab == 1) && uiCount % 6 == 0) renderTab()
             uiCount++
             handler.postDelayed(this, 1100)
         }
@@ -410,6 +409,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun renderMeshPage() {
         section("Mesh & WLAN-Analyse", "Access Points, Funkkanäle, Roaming und Messfahrtvergleich.")
+        addVertical(page, action("Analyse aktualisieren", { renderTab() }), marginBottom = 9)
         val aps = selectableAPs()
         val top = card("NETZWERKSTATUS")
         val byBand = aps.groupBy { it.band }
