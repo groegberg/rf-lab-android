@@ -602,6 +602,217 @@ class MainActivity : Activity(), SensorEventListener {
             "Referenzmessungen pro Raum und gleiche Smartphone-Ausrichtung verwenden.")
     }
 
+
+    /**
+     * Camera-independent user-anchored floor plan. Never interpolate positions from the IMU.
+     */
+    private fun renderManualPage() {
+        section("Nachtmodus · manueller Grundriss",
+            "Ohne Kamera: Positionen selbst setzen, WLAN messen, Signalstärken vergleichen.")
+        val intro = card("MESSMODUS")
+        addVertical(intro, text(if (recording && manualOnly)
+            "Manuelle Messfahrt läuft · Kamera bleibt ausgeschaltet."
+            else if (recording)
+                "ARCore-Messfahrt läuft. Bei längerer Dunkelheit wechselt die App automatisch hierher."
+            else "Wähle diesen Reiter und starte eine Messfahrt: ganz ohne ARCore.",
+            12.6f, if (recording && manualOnly) success else light))
+        addVertical(intro, text("1. Raumgröße einstellen  ·  2. Auf Plan tippen  ·  " +
+            "3. Pro Standort 10–20 s stillhalten  ·  4. Aufnahme pausieren und weitergehen",
+            11.8f, muted), marginTop = 9)
+        if (!recording) addVertical(intro, action("Kamera-freie Messfahrt starten", { startSurvey() }, true),
+            marginTop = 10)
+        addVertical(page, intro, marginBottom = 12)
+
+        val settings = card("GRUNDRISS · VON OBEN")
+        addVertical(settings, text(String.format(Locale.GERMAN,
+            "Manuell eingegebene Raumgröße: %.1f × %.1f Meter",
+            manual.widthM, manual.heightM), 13f))
+        addVertical(settings, action("Raummaße ändern", { manualSizeDialog() }), marginTop = 8)
+        addVertical(page, settings, marginBottom = 10)
+
+        val access = manual.accessPoints()
+        if (access.isNotEmpty()) {
+            val entries = listOf("Nur Messpunkte") +
+                access.map { it.second.take(18) + " · " + it.first.takeLast(5) }
+            val dropdown = Spinner(this)
+            dropdown.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, entries)
+            val idx = access.indexOfFirst { it.first == manualBssid }
+            dropdown.setSelection(if (idx < 0) 0 else idx + 1)
+            dropdown.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    manualBssid = if (position == 0) "" else access[position - 1].first
+                    manualMap?.selectedBssid = manualBssid
+                }
+            }
+            addVertical(page, dropdown, marginBottom = 10)
+        }
+
+        val plot = ManualMapView(this).apply {
+            survey = manual
+            selectedBssid = manualBssid
+            placeMode = recording && manualOnly
+            onPlace = { x, z ->
+                if (!recording || !manualOnly) {
+                    Toast.makeText(this@MainActivity,
+                        "Zum Platzieren Nachtmessung starten.", Toast.LENGTH_SHORT).show()
+                } else {
+                    val point = manual.addPoint(x, z)
+                    if (point != null) {
+                        store.write("manual_point", JSONObject()
+                            .put("id", point.id).put("label", point.label)
+                            .put("x_m", point.x.toDouble()).put("z_m", point.z.toDouble())
+                            .put("frame", "user-placed floorplan"))
+                        infoLog = "Messpunkt " + point.label + " aktiv. Jetzt stillhalten."
+                        requestScan()
+                        renderTab()
+                    }
+                }
+            }
+            onSelect = { id ->
+                manual.select(id)
+                if (recording && store.isRecording) store.write("manual_point_select",
+                    JSONObject().put("point_id", id).put("collecting", false))
+                infoLog = "Messpunkt ausgewählt; Aufnahme zuerst wieder starten."
+                renderTab()
+            }
+        }
+        manualMap = plot
+        addVertical(page, plot, height = dp(345), marginBottom = 10)
+
+        manualStatus = text(manual.selectedDescription(), 12.5f,
+            if (manual.collecting) success else muted)
+        addVertical(page, manualStatus!!, marginTop = 3)
+        if (recording && manualOnly) {
+            addVertical(page, rowOf(
+                action("Neuer Punkt", {
+                    manualMap?.placeMode = true
+                    infoLog = "Tippe zum Platzieren auf den Grundriss."
+                    updateStatus()
+                }),
+                action("Punkt wählen", {
+                    manualMap?.placeMode = false
+                    manual.record(false)
+                    infoLog = "Tippe auf einen vorhandenen Messpunkt."
+                    updateStatus()
+                })
+            ), marginTop = 11)
+            addVertical(page, rowOf(
+                action(if (manual.collecting) "Aufnahme pausieren" else "Am Punkt messen", {
+                    val enabled = !manual.collecting
+                    if (!manual.record(enabled)) {
+                        Toast.makeText(this, "Zuerst einen Messpunkt setzen.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        if (enabled) requestScan()
+                        if (store.isRecording) store.write("manual_capture",
+                            JSONObject().put("point_id", manual.selectedId ?: -1)
+                                .put("collecting", enabled))
+                        renderTab()
+                    }
+                }, true),
+                action("WLAN-Scan", { requestScan() })
+            ), marginTop = 8)
+        } else {
+            addVertical(page, action("Letzte manuelle Messkarte laden", {
+                if (manual.loadLatest()) renderTab() else
+                    Toast.makeText(this, "Keine frühere Nachtmessung gefunden.", Toast.LENGTH_SHORT).show()
+            }), marginTop = 10)
+        }
+
+        val stats = card("DATENQUALITÄT")
+        addVertical(stats, text(manual.allPoints().size.toString() + " manuelle Positionen · " +
+            manual.count() + " WLAN-Beobachtungen · " +
+            manual.summary().size + " BSSID/Punkt-Kombinationen", 12.6f))
+        val covered = manual.summary().groupBy { it.pointId }.keys.size
+        addVertical(stats, text(covered.toString() +
+            " Messpunkte mit Funkdaten. Für eine Heatmap mindestens drei verteilte Messpunkte " +
+            "und einen einzelnen Access Point auswählen.", 11.3f, muted), marginTop = 6)
+        addVertical(stats, action("Messwerte als CSV exportieren", { exportManualCsv() }),
+            marginTop = 10)
+        addVertical(page, stats, marginTop = 12)
+
+        messageLine("Messpunktkoordinaten stammen von deiner Eingabe. " +
+            "Es gibt ohne ARCore keine automatisch gemessene Trajektorie. " +
+            "Heatmaps werden nur nahe den manuell gesetzten Punkten interpoliert.")
+    }
+
+    private fun manualSizeDialog() {
+        val fields = stack()
+        fields.setPadding(dp(22), dp(8), dp(22), dp(8))
+        val width = EditText(this).apply {
+            hint = "Breite in Metern"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(manual.widthM.toString())
+        }
+        val height = EditText(this).apply {
+            hint = "Tiefe in Metern"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(manual.heightM.toString())
+        }
+        addVertical(fields, text("Breite (m)"))
+        addVertical(fields, width)
+        addVertical(fields, text("Tiefe (m)"), marginTop = 7)
+        addVertical(fields, height)
+        AlertDialog.Builder(this).setTitle("Raumgröße festlegen")
+            .setView(fields)
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Übernehmen") { _, _ ->
+                val w = width.text.toString().replace(',', '.').toFloatOrNull() ?: 0f
+                val h = height.text.toString().replace(',', '.').toFloatOrNull() ?: 0f
+                if (!manual.setSize(w, h)) {
+                    Toast.makeText(this, "Nur Maße von 1 bis 100 m möglich.", Toast.LENGTH_LONG).show()
+                } else {
+                    if (recording && store.isRecording) store.write("manual_room_size",
+                        JSONObject().put("width_m", w.toDouble()).put("height_m", h.toDouble()))
+                    renderTab()
+                }
+            }.show()
+    }
+
+    private fun writeManualReading(row: ManualReading) {
+        if (!recording || !store.isRecording) return
+        store.write("manual_rf", JSONObject()
+            .put("point_id", row.pointId)
+            .put("source", row.source)
+            .put("sample_t_ns", row.tNs)
+            .put("ssid", row.ssid)
+            .put("bssid", row.bssid)
+            .put("frequency_mhz", row.freq)
+            .put("rssi_dbm", row.rssi)
+            .put("position_source", "user-placed, not ARCore"))
+    }
+
+    private fun fallbackToManual() {
+        if (!recording || manualOnly) return
+        manualOnly = true
+        val identifier = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMAN).format(Date())
+        manual.start("Low-Light-Messung " + identifier)
+        ar.stop()
+        handler.removeCallbacks(scanTask)
+        handler.post(scanTask)
+        if (store.isRecording) store.write("ar_low_light_fallback", JSONObject()
+            .put("reason", "INSUFFICIENT_LIGHT")
+            .put("manual_positions_required", true)
+            .put("auto_position_tracking", false))
+        currentTab = 4
+        infoLog = "Zu dunkel für ARCore. WLAN läuft weiter – jetzt manuelle Messpunkte setzen."
+        renderTab()
+    }
+
+    private fun exportManualCsv() {
+        if (manual.summary().isEmpty()) {
+            Toast.makeText(this, "Noch keine WLAN-Werte an Messpunkten.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/csv"
+            putExtra(Intent.EXTRA_TITLE, "rf_lab_manual_wifi.csv")
+        }, csvExportCode)
+    }
+
     private fun renderExpertPage() {
         section("Experten & Diagnose", "Alle bisherigen Messfunktionen und erweiterte Rohprotokolle.")
         val diag = card("KLASSISCHE RF-LAB-DIAGNOSE")
