@@ -14,6 +14,8 @@ import android.hardware.SensorManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.ScanResult
+import android.net.wifi.MloLink
+import android.net.wifi.aware.WifiAwareManager
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.net.wifi.rtt.RangingRequest
@@ -28,6 +30,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.util.Base64
 import android.view.View
 import org.json.JSONArray
 import org.json.JSONObject
@@ -191,7 +194,9 @@ class MainActivity : Activity(), SensorEventListener {
             .put("permissions_granted", permitted())
             .put("wifi_24ghz", wifi.is24GHzBandSupported)
             .put("wifi_5ghz", wifi.is5GHzBandSupported)
-            .put("wifi_6ghz", wifi.is6GHzBandSupported)
+.put("wifi_6ghz", wifi.is6GHzBandSupported)
+            .put("wifi_7_11be", wifi.isWifiStandardSupported(ScanResult.WIFI_STANDARD_11BE))
+            .put("wifi_aware", (getSystemService(Context.WIFI_AWARE_SERVICE) as? WifiAwareManager)?.isAvailable == true)
             .put("wifi_rtt_available", rtt?.isAvailable == true)
             .put("uwb_feature", pm.hasSystemFeature("android.hardware.uwb"))
             .put("public_csi_or_iq_api", false)
@@ -226,6 +231,34 @@ class MainActivity : Activity(), SensorEventListener {
         } catch (e: Exception) { log("WLAN Fehler: ${e.message}") }
     }
 
+    private fun mloLinksToJson(links: List<MloLink>): JSONArray {
+        val out = JSONArray()
+        for (link in links) {
+            out.put(JSONObject()
+                .put("id", link.linkId)
+                .put("band_code", link.band)
+                .put("channel", link.channel)
+                .put("state_code", link.state)
+                .put("rssi_dbm", if (link.rssi in -110..-1) link.rssi else JSONObject.NULL)
+                .put("ap_mac", link.apMacAddress?.toString() ?: ""))
+        }
+        return out
+    }
+
+    private fun beaconElementsToJson(ap: ScanResult): JSONArray {
+        val out = JSONArray()
+        for (element in ap.informationElements) {
+            val buffer = element.bytes.asReadOnlyBuffer()
+            val bytes = ByteArray(minOf(buffer.remaining(), 2048))
+            buffer.get(bytes)
+            out.put(JSONObject()
+                .put("id", element.id)
+                .put("id_ext", element.idExt)
+                .put("bytes_b64", Base64.encodeToString(bytes, Base64.NO_WRAP)))
+        }
+        return out
+    }
+
     private fun isRtt(ap: ScanResult): Boolean =
         ap.is80211mcResponder() ||
             (Build.VERSION.SDK_INT >= 35 && ap.is80211azNtbResponder())
@@ -245,7 +278,15 @@ class MainActivity : Activity(), SensorEventListener {
                     .put("channel_width_code", ap.channelWidth)
                     .put("wifi_standard_code", ap.wifiStandard)
                     .put("seen_t_ns", ap.timestamp * 1000L)
-                    .put("rtt", isRtt(ap)))
+                    .put("rtt", isRtt(ap))
+                    .put("rtt_mc", ap.is80211mcResponder())
+                    .put("rtt_az_ntb", Build.VERSION.SDK_INT >= 35 && ap.is80211azNtbResponder())
+                    .put("center_frequency0_mhz", ap.centerFreq0)
+                    .put("center_frequency1_mhz", ap.centerFreq1)
+                    .put("mlo_ap_mac", ap.apMldMacAddress?.toString() ?: "")
+                    .put("mlo_link_id", ap.apMloLinkId)
+                    .put("mlo_affiliated_links", mloLinksToJson(ap.affiliatedMloLinks))
+                    .put("beacon_ies", beaconElementsToJson(ap)))
             }
             store.write("wifi_scan", JSONObject().put("updated", fresh).put("aps", aps))
             log("WLAN: ${latestScan.size} APs, ${latestScan.count { isRtt(it) }} RTT-fähig")
@@ -277,6 +318,8 @@ class MainActivity : Activity(), SensorEventListener {
                                 .put("distance_std_mm", item.distanceStdDevMm)
                                 .put("rssi_dbm", item.rssi)
                                 .put("ranging_t_ms", item.rangingTimestampMillis)
+                                .put("attempted_measurements", item.numAttemptedMeasurements)
+                                .put("successful_measurements", item.numSuccessfulMeasurements)
                             log("RTT ${item.macAddress}: ${item.distanceMm / 1000.0} m")
                         } else log("RTT ${item.macAddress}: Status ${item.status}")
                         rows.put(row)
@@ -346,7 +389,12 @@ class MainActivity : Activity(), SensorEventListener {
                     .put("ssid", info.ssid ?: "")
                     .put("frequency_mhz", info.frequency)
                     .put("tx_speed_mbps", info.txLinkSpeedMbps)
-                    .put("rx_speed_mbps", info.rxLinkSpeedMbps))
+                    .put("rx_speed_mbps", info.rxLinkSpeedMbps)
+                    .put("wifi_standard", info.wifiStandard)
+                    .put("ap_mld_mac", info.apMldMacAddress?.toString() ?: "")
+                    .put("mlo_link_id", info.apMloLinkId)
+                    .put("mlo_associated_links", mloLinksToJson(info.associatedMloLinks))
+                    .put("mlo_affiliated_links", mloLinksToJson(info.affiliatedMloLinks)))
             } else {
                 wifiLinkMisses++
                 if (wifiLinkMisses == 1 || wifiLinkMisses % 10 == 0) {
