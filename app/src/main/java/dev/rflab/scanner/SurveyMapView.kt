@@ -98,9 +98,11 @@ class SurveyMapView(context: Context) : View(context) {
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
 
-        val active = radios.filter { it.pose != null &&
+        val newestRun = poses.maxOfOrNull { it.run } ?: 0
+        val active = radios.filter { it.pose?.run == newestRun &&
             (selectedBssid.isBlank() || it.bssid == selectedBssid) }
-        val validPositions = poses
+        val validPositions = poses.filter { it.run == newestRun }
+        val visibleCloud = cloud.filter { it.run == newestRun }
         val originX = if (validPositions.isNotEmpty()) validPositions.map { it.x }.average().toFloat() else 0f
         val originY = if (validPositions.isNotEmpty()) validPositions.map { it.y }.average().toFloat() else 0f
         val originZ = if (validPositions.isNotEmpty()) validPositions.map { it.z }.average().toFloat() else 0f
@@ -194,10 +196,10 @@ class SurveyMapView(context: Context) : View(context) {
         }
 
         // Optical point cloud, visually distinct from wireless observations.
-        if (showDepth && cloud.isNotEmpty()) {
+        if (showDepth && visibleCloud.isNotEmpty()) {
             paint.style = Paint.Style.FILL
             paint.color = Color.argb(128, 100, 191, 233)
-            for (p in cloud.takeLast(18000)) {
+            for (p in visibleCloud.takeLast(18000)) {
                 val at = project(p.x, p.y, p.z)
                 if (at.first in 0f..w && at.second in 0f..h)
                     canvas.drawCircle(at.first, at.second, density * 1.05f, paint)
