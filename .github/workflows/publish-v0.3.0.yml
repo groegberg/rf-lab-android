@@ -1,0 +1,54 @@
+name: Publish RF Lab v0.3.0 APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v0.3.0.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Enable Android SDK tools
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -x "$SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+      - name: Install Android SDK
+        run: sdkmanager --install "platforms;android-36" "build-tools;35.0.0" "platform-tools"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Build APK
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Verify APK
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk RF-Lab-Field-Studio-v0.3.0.apk
+          sha256sum RF-Lab-Field-Studio-v0.3.0.apk
+      - name: Publish release asset in private repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.3.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v0.3.0 exists; preserving published release."
+            exit 0
+          fi
+          gh release create v0.3.0 RF-Lab-Field-Studio-v0.3.0.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RF Lab Field Studio v0.3.0" \
+            --notes "Root-free Android field studio: Wi-Fi signal maps, mesh diagnostics, ARCore Depth optical point cloud and offline indoor Wi-Fi fingerprints. Debug APK; experimental release. The repository is private: sign in to GitHub to download."
