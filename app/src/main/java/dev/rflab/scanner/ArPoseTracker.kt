@@ -13,6 +13,8 @@ import com.google.ar.core.ArCoreApk
 import com.google.ar.core.CameraConfig
 import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.CameraIntrinsics
+import com.google.ar.core.Config
+import com.google.ar.core.exceptions.NotYetAvailableException
 import com.google.ar.core.Coordinates2d
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
@@ -20,6 +22,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import android.media.Image
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -34,7 +37,9 @@ class ArPoseTracker(
     context: Context,
     private val activity: Activity,
     private val store: SessionStore,
-    private val report: (String) -> Unit
+    private val report: (String) -> Unit,
+    private val poseObserver: ((JSONObject, Long) -> Unit)? = null,
+    private val depthObserver: ((List<SurveyDepth>, Long) -> Unit)? = null
 ) : GLSurfaceView(context), GLSurfaceView.Renderer {
 
     @Volatile private var session: Session? = null
@@ -49,6 +54,8 @@ class ArPoseTracker(
     private var lastErrorNs = 0L
     private var lastTracking = ""
     private var cameraIntrinsicsReported = false
+    private var lastDepthNs = 0L
+    private var depthAvailable = false
     private var sweepRequested = false
     private var sweepRunning = false
     private var sweepConfigs: List<CameraConfig> = emptyList()
@@ -94,6 +101,13 @@ class ArPoseTracker(
             }
             val newSession = Session(activity)
             val cameraSelection = selectWidestSupportedRearCamera(newSession)
+            depthAvailable = depthObserver != null && !sweepRequested &&
+                newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+            if (depthAvailable) {
+                val depthConfig = newSession.config
+                depthConfig.depthMode = Config.DepthMode.AUTOMATIC
+                newSession.configure(depthConfig)
+            }
             if (sweepRequested) {
                 sweepConfigs = newSession.getSupportedCameraConfigs(
                     CameraConfigFilter(newSession).setFacingDirection(CameraConfig.FacingDirection.BACK))
@@ -112,6 +126,7 @@ class ArPoseTracker(
             session = newSession
             running = true
             lastPoseNs = 0L
+            lastDepthNs = 0L
             lastFrameTimestamp = 0L
             lastTracking = ""
             cameraIntrinsicsReported = false
@@ -127,6 +142,10 @@ class ArPoseTracker(
                 report("ARCore-Kameratest: ${sweepConfigs.size} Konfigurationen, je 7 Sekunden. Kamera ruhig auf strukturierte Szene richten.")
             }
             store.write("ar_camera_config", cameraSelection)
+            store.write("ar_depth_capability", JSONObject()
+                .put("supported", depthAvailable)
+                .put("mode", if (depthAvailable) "AUTOMATIC" else "DISABLED")
+                .put("geometry_source", "ARCore optical depth, not RF reflection"))
             store.write("ar_session_start", JSONObject()
                 .put("coordinate_frame", "ARCore per-session local world frame, not an RF map")
                 .put("pose_type", "visual_inertial_camera_pose")
@@ -228,6 +247,12 @@ class ArPoseTracker(
             val now = SystemClock.elapsedRealtimeNanos()
             val camera = frame.camera
             if (sweepRunning) recordSweepFrame(frame.timestamp, camera.trackingState, now, camera.imageIntrinsics)
+            if (depthAvailable && !sweepRunning &&
+                camera.trackingState == TrackingState.TRACKING &&
+                now - lastDepthNs > 750_000_000L) {
+                lastDepthNs = now
+                captureDepth(frame, camera.pose, camera.textureIntrinsics, now)
+            }
             if (!cameraIntrinsicsReported) {
                 cameraIntrinsicsReported = true
                 val intrinsics = camera.imageIntrinsics
@@ -266,6 +291,7 @@ class ArPoseTracker(
                             .put(pose.qw().toDouble()))
                 }
                 store.write("ar_pose", record)
+                poseObserver?.invoke(record, now)
             }
         } catch (e: Exception) {
             if (sweepRunning) sweepErrors++
@@ -341,6 +367,92 @@ class ArPoseTracker(
         return result
     }
 
+
+
+    /** Optical geometry, collected sparsely to cap memory and JSONL size. */
+    private fun captureDepth(
+        frame: com.google.ar.core.Frame,
+        cameraPose: com.google.ar.core.Pose,
+        intrinsics: CameraIntrinsics,
+        timeNs: Long
+    ) {
+        try {
+            frame.acquireRawDepthImage16Bits().use { depthImage ->
+                frame.acquireRawDepthConfidenceImage().use { confidenceImage ->
+                    val points = depthToWorld(depthImage, confidenceImage, intrinsics, cameraPose)
+                    if (points.isNotEmpty()) {
+                        val arr = JSONArray()
+                        for (p in points) arr.put(JSONArray()
+                            .put(p.x.toDouble()).put(p.y.toDouble())
+                            .put(p.z.toDouble()).put(p.confidence.toDouble()))
+                        store.write("ar_depth_points", JSONObject()
+                            .put("t_frame_ns", frame.timestamp)
+                            .put("depth_image_timestamp_ns", depthImage.timestamp)
+                            .put("width", depthImage.width)
+                            .put("height", depthImage.height)
+                            .put("method", "ARCore raw optical depth, calibrated by texture intrinsics")
+                            .put("points", arr))
+                        depthObserver?.invoke(points, timeNs)
+                    }
+                }
+            }
+        } catch (_: NotYetAvailableException) {
+            // Raw depth is not available on every frame; normal, especially at startup.
+        } catch (e: Exception) {
+            if (timeNs - lastErrorNs > 3_000_000_000L) {
+                lastErrorNs = timeNs
+                store.write("ar_depth_error", JSONObject()
+                    .put("exception", e.javaClass.simpleName)
+                    .put("detail", e.message ?: ""))
+                report("Tiefenscan: " + e.javaClass.simpleName)
+            }
+        }
+    }
+
+    private fun depthToWorld(
+        depth: Image, confidence: Image, intr: CameraIntrinsics,
+        pose: com.google.ar.core.Pose
+    ): List<SurveyDepth> {
+        val w = depth.width
+        val h = depth.height
+        val plane = depth.planes[0]
+        val qualityPlane = confidence.planes[0]
+        val values = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        val qualities = qualityPlane.buffer.duplicate()
+        val dims = intr.imageDimensions
+        val focal = intr.focalLength
+        val center = intr.principalPoint
+        if (dims[0] <= 0 || dims[1] <= 0 || focal[0] <= 0f || focal[1] <= 0f) return emptyList()
+        val fx = focal[0] * w / dims[0]
+        val fy = focal[1] * h / dims[1]
+        val cx = center[0] * w / dims[0]
+        val cy = center[1] * h / dims[1]
+        val matrix = FloatArray(16)
+        pose.toMatrix(matrix, 0)
+        val sampled = ArrayList<SurveyDepth>()
+        val stepX = kotlin.math.max(8, w / 14)
+        val stepY = kotlin.math.max(8, h / 11)
+        for (y in stepY / 2 until h step stepY) {
+            for (x in stepX / 2 until w step stepX) {
+                val index = y * plane.rowStride + x * plane.pixelStride
+                val qualityIndex = y * qualityPlane.rowStride + x * qualityPlane.pixelStride
+                if (index + 1 >= values.limit() || qualityIndex >= qualities.limit()) continue
+                val millimeters = values.getShort(index).toInt() and 0xffff
+                val q = (qualities.get(qualityIndex).toInt() and 0xff) / 255f
+                if (millimeters !in 450..8000 || q < .45f) continue
+                val z = millimeters / 1000f
+                val px = (x - cx) * z / fx
+                val py = (cy - y) * z / fy
+                val pz = -z
+                val wx = matrix[0] * px + matrix[4] * py + matrix[8] * pz + matrix[12]
+                val wy = matrix[1] * px + matrix[5] * py + matrix[9] * pz + matrix[13]
+                val wz = matrix[2] * px + matrix[6] * py + matrix[10] * pz + matrix[14]
+                if (wx.isFinite() && wy.isFinite() && wz.isFinite())
+                    sampled.add(SurveyDepth(wx, wy, wz, q))
+            }
+        }
+        return sampled
+    }
 
     private fun arConfigSpec(config: CameraConfig, index: Int): JSONObject {
         val spec = JSONObject()
