@@ -49,7 +49,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var latestScan: List<ScanResult> = emptyList()
     private var recording = false
     private var receiverActive = false
-    private val autoScanIntervalMs = 35_000L
+    private var fastWifiScans = false
+    private val autoScanIntervalMs: Long get() = if (fastWifiScans) 10_000L else 35_000L
     private val permissionCode = 110
     private val exportCode = 120
     private val cameraPermCode = 121
@@ -58,8 +59,20 @@ class MainActivity : Activity(), SensorEventListener {
 
     private val wifiReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val fresh = intent?.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false) == true
-            showScan(fresh)
+            if (intent?.action == WifiManager.RSSI_CHANGED_ACTION) {
+                if (recording) {
+                    val updatedRssi = intent.getIntExtra(WifiManager.EXTRA_NEW_RSSI, -127)
+                    store.write("wifi_rssi_event", JSONObject()
+                        .put("rssi_dbm", updatedRssi)
+                        .put("valid", updatedRssi in -110..-1))
+                    logConnectedWifi()
+                }
+                return
+            }
+            if (intent?.action == WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) {
+                val fresh = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                showScan(fresh)
+            }
         }
     }
 
@@ -118,6 +131,21 @@ class MainActivity : Activity(), SensorEventListener {
         button("10. ARCore stoppen") { if (::arPose.isInitialized) arPose.stop() }
         button("11. Alle ARCore-Kamera-Configs testen (~63s)") { startArConfigTest() }
         button("12. WLAN-Kanalübersicht abfragen") { ensureSession(); requestChannelSurvey() }
+        root.addView(Button(this).apply {
+            text = "13. WLAN-Schnellscan: AUS (35 s)"
+            setOnClickListener {
+                fastWifiScans = !fastWifiScans
+                text = if (fastWifiScans) "13. WLAN-Schnellscan: AN (10 s)"
+                    else "13. WLAN-Schnellscan: AUS (35 s)"
+                ensureSession()
+                store.write("wifi_scan_mode", JSONObject()
+                    .put("requested_interval_ms", autoScanIntervalMs)
+                    .put("note", "Android may throttle; each attempt and freshness are separately logged"))
+                handler.removeCallbacks(autoWifiScanner)
+                if (recording) handler.post(autoWifiScanner)
+                log("WLAN-Scanintervall: ${autoScanIntervalMs / 1000} s; Schnellmodus für deaktivierte Android-Scan-Drosselung")
+            }
+        })
         arPose = ArPoseTracker(this, this, store) { message -> runOnUiThread { log(message) } }
         root.addView(arPose, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, (260 * resources.displayMetrics.density).toInt()))
@@ -127,7 +155,9 @@ class MainActivity : Activity(), SensorEventListener {
         })
         logView = TextView(this).apply { textSize = 12f; setTextIsSelectable(true) }
         root.addView(logView)
-        val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION).apply {
+            addAction(WifiManager.RSSI_CHANGED_ACTION)
+        }
         try {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(wifiReceiver, filter, RECEIVER_NOT_EXPORTED)
             else registerReceiver(wifiReceiver, filter)
@@ -392,7 +422,7 @@ class MainActivity : Activity(), SensorEventListener {
         handler.post(linkSampler)
         handler.post(autoWifiScanner)
         status.text = "Messfahrt läuft: IMU + WLAN"
-        log("Messfahrt gestartet: $count Sensoren; WLAN-Scan alle 35s (Android-Throttling möglich)")
+        log("Messfahrt gestartet: $count Sensoren; WLAN-Scan alle ${autoScanIntervalMs / 1000}s (Android-Throttling möglich)")
     }
 
     override fun onSensorChanged(event: SensorEvent) {
