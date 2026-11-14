@@ -652,7 +652,19 @@ class MainActivity : Activity(), SensorEventListener {
             val entries = listOf("Nur Messpunkte") +
                 access.map { it.second.take(18) + " · " + it.first.takeLast(5) }
             val dropdown = Spinner(this)
-            dropdown.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, entries)
+            dropdown.adapter = object : ArrayAdapter<String>(this,
+                android.R.layout.simple_spinner_item, entries) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                    text(getItem(position) ?: "", 13f, light).apply {
+                        background = rounded(surfaceBright, 8)
+                        setPadding(dp(12), dp(13), dp(10), dp(13))
+                    }
+                override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
+                    text(getItem(position) ?: "", 13f, light).apply {
+                        background = rounded(surfaceBright, 4)
+                        setPadding(dp(12), dp(13), dp(10), dp(13))
+                    }
+            }
             val idx = access.indexOfFirst { it.first == manualBssid }
             dropdown.setSelection(if (idx < 0) 0 else idx + 1)
             dropdown.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -997,7 +1009,7 @@ class MainActivity : Activity(), SensorEventListener {
         ar.stop()
         if (manualOnly) manual.finish()
         store.write("survey_stop", JSONObject()
-            .put("manual_points", manual.allPoints().size)
+            .put("manual_points", if (manualOnly) manual.allPoints().size else 0)
             .put("manual_samples", if (manualOnly) manual.count() else 0)
             .put("poses", data.snapshotPoses().size)
             .put("positioned_radios", data.positionedCount())
@@ -1261,7 +1273,7 @@ class MainActivity : Activity(), SensorEventListener {
                     .append(String.format(Locale.ROOT, "%.4f", p.x)).append(';')
                     .append(String.format(Locale.ROOT, "%.4f", p.y)).append(';')
                     .append(String.format(Locale.ROOT, "%.4f", p.z))
-            } else csv.append(";;;;")
+            } else csv.append(";;;")
             csv.append('\n')
         }
         return csv.toString()
