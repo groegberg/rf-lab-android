@@ -1,0 +1,327 @@
+package dev.rflab.scanner
+
+import android.Manifest
+import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.ScanResult
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
+import android.net.wifi.rtt.RangingRequest
+import android.net.wifi.rtt.RangingResult
+import android.net.wifi.rtt.RangingResultCallback
+import android.net.wifi.rtt.WifiRttManager
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.FileInputStream
+
+class MainActivity : Activity(), SensorEventListener {
+    private lateinit var wifi: WifiManager
+    private var rtt: WifiRttManager? = null
+    private lateinit var sensors: SensorManager
+    private lateinit var store: SessionStore
+    private lateinit var logView: TextView
+    private lateinit var status: TextView
+    private val history = ArrayDeque<String>()
+    private val handler = Handler(Looper.getMainLooper())
+    private var latestScan: List<ScanResult> = emptyList()
+    private var recording = false
+    private var receiverActive = false
+    private val permissionCode = 110
+    private val exportCode = 120
+
+    private val wifiReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val fresh = intent?.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false) == true
+            showScan(fresh)
+        }
+    }
+
+    private val linkSampler = object : Runnable {
+        override fun run() {
+            if (!recording) return
+            logConnectedWifi()
+            handler.postDelayed(this, 1000L)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        rtt = getSystemService(Context.WIFI_RTT_RANGING_SERVICE) as? WifiRttManager
+        sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        store = SessionStore(this)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(22, 32, 22, 40)
+        }
+        val scroll = ScrollView(this)
+        scroll.addView(root)
+        setContentView(scroll)
+        root.addView(TextView(this).apply {
+            text = "RF LAB · Pixel 10 Pro XL"
+            textSize = 24f
+        })
+        status = TextView(this).apply { text = "Bereit"; textSize = 17f }
+        root.addView(status)
+        fun button(name: String, action: () -> Unit) {
+            root.addView(Button(this).apply { text = name; setOnClickListener { action() } })
+        }
+        button("1. Berechtigungen freigeben") { requestPerms() }
+        button("2. Hardware prüfen") { capabilities() }
+        button("3. WLAN Scan (2,4/5/6 GHz)") { ensureSession(); startWifiScan() }
+        button("4. WiFi RTT messen") { ensureSession(); measureRtt() }
+        button("5. IMU-Aufzeichnung starten") { startMotion() }
+        button("6. IMU-Aufzeichnung stoppen") { stopMotion() }
+        button("7. Messpunkt markieren") {
+            ensureSession()
+            store.write("marker", JSONObject().put("label", "manual marker"))
+            log("Messpunkt markiert")
+        }
+        button("8. JSONL exportieren") { exportJsonl() }
+        logView = TextView(this).apply { textSize = 12f; setTextIsSelectable(true) }
+        root.addView(logView)
+        val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(wifiReceiver, filter, RECEIVER_NOT_EXPORTED)
+            else registerReceiver(wifiReceiver, filter)
+            receiverActive = true
+        } catch (e: Exception) { log("WLAN Receiver: ${e.message}") }
+        log("Nur öffentliche Android-APIs; keine CSI/IQ-Rohdaten und kein Internet-Zugriff.")
+        log("Für WLAN-Scan: präzisen Standort erlauben und Standortdienste aktivieren.")
+        capabilities()
+    }
+
+    private fun log(message: String) {
+        history.addLast(message)
+        if (history.size > 70) history.removeFirst()
+        if (::logView.isInitialized) logView.text = history.joinToString("\n")
+    }
+
+    private fun permitted(): Boolean =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+        (Build.VERSION.SDK_INT < 33 ||
+            checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED)
+
+    private fun requestPerms() {
+        val requests = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= 33) requests.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        requestPermissions(requests.toTypedArray(), permissionCode)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == permissionCode) log(if (permitted()) "Berechtigungen OK" else "Berechtigungen fehlen")
+    }
+
+    private fun ensureSession() {
+        if (!store.isRecording) store.start()
+        status.text = "Messdatei: ${store.currentFile?.name}"
+    }
+
+    private fun capabilities() {
+        val pm = packageManager
+        val record = JSONObject()
+            .put("manufacturer", Build.MANUFACTURER)
+            .put("model", Build.MODEL)
+            .put("android_sdk", Build.VERSION.SDK_INT)
+            .put("permissions_granted", permitted())
+            .put("wifi_24ghz", wifi.is24GHzBandSupported)
+            .put("wifi_5ghz", wifi.is5GHzBandSupported)
+            .put("wifi_6ghz", wifi.is6GHzBandSupported)
+            .put("wifi_rtt_available", rtt?.isAvailable == true)
+            .put("uwb_feature", pm.hasSystemFeature("android.hardware.uwb"))
+            .put("public_csi_or_iq_api", false)
+        val inventory = JSONArray()
+        for (id in listOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE,
+            Sensor.TYPE_MAGNETIC_FIELD, Sensor.TYPE_ROTATION_VECTOR,
+            Sensor.TYPE_LINEAR_ACCELERATION, Sensor.TYPE_GAME_ROTATION_VECTOR)) {
+            val s = sensors.getDefaultSensor(id)
+            inventory.put(JSONObject().put("id", id).put("present", s != null)
+                .put("name", s?.name ?: ""))
+        }
+        record.put("sensors", inventory)
+        ensureSession()
+        store.write("capabilities", record)
+        log("Hardware: ${Build.MODEL}, Android API ${Build.VERSION.SDK_INT}")
+        log("WLAN 2,4=${wifi.is24GHzBandSupported}, 5=${wifi.is5GHzBandSupported}, 6=${wifi.is6GHzBandSupported}")
+        log("RTT=${rtt?.isAvailable == true} · UWB-Chip=${pm.hasSystemFeature("android.hardware.uwb")}")
+        log("Sensoren: ${inventory.length()} geprüft")
+    }
+
+    private fun startWifiScan() {
+        if (!permitted()) { log("Zuerst Berechtigungen erteilen"); return }
+        try {
+            val ok = wifi.startScan()
+            log(if (ok) "WLAN Scan gestartet" else "Scan gedrosselt/nicht gestartet – Cache wird gelesen")
+            if (!ok) showScan(false)
+        } catch (e: Exception) { log("WLAN Fehler: ${e.message}") }
+    }
+
+    private fun isRtt(ap: ScanResult): Boolean =
+        ap.is80211mcResponder() ||
+            (Build.VERSION.SDK_INT >= 35 && ap.is80211azNtbResponder())
+
+    private fun showScan(fresh: Boolean) {
+        if (!permitted()) return
+        try {
+            latestScan = wifi.scanResults.sortedBy { it.frequency }
+            val aps = JSONArray()
+            for (ap in latestScan) {
+                aps.put(JSONObject()
+                    .put("ssid", ap.SSID)
+                    .put("bssid", ap.BSSID)
+                    .put("frequency_mhz", ap.frequency)
+                    .put("rssi_dbm", ap.level)
+                    .put("channel_width_code", ap.channelWidth)
+                    .put("wifi_standard_code", ap.wifiStandard)
+                    .put("seen_t_ns", ap.timestamp * 1000L)
+                    .put("rtt", isRtt(ap)))
+            }
+            store.write("wifi_scan", JSONObject().put("updated", fresh).put("aps", aps))
+            log("WLAN: ${latestScan.size} APs, ${latestScan.count { isRtt(it) }} RTT-fähig")
+            for (ap in latestScan.take(10)) log("${ap.SSID} · ${ap.frequency} MHz · ${ap.level} dBm")
+        } catch (e: Exception) { log("ScanResult Fehler: ${e.message}") }
+    }
+
+    private fun measureRtt() {
+        if (!permitted()) { log("Berechtigungen fehlen"); return }
+        val manager = rtt
+        if (manager?.isAvailable != true) { log("RTT derzeit nicht verfügbar"); return }
+        val peers = latestScan.filter { isRtt(it) }.take(RangingRequest.getMaxPeers())
+        if (peers.isEmpty()) { log("Keine RTT-fähigen APs gefunden"); return }
+        try {
+            val request = RangingRequest.Builder().addAccessPoints(peers).build()
+            manager.startRanging(request, mainExecutor, object : RangingResultCallback() {
+                override fun onRangingFailure(code: Int) {
+                    store.write("rtt_failure", JSONObject().put("code", code))
+                    log("RTT Fehlercode: $code")
+                }
+                override fun onRangingResults(results: List<RangingResult>) {
+                    val rows = JSONArray()
+                    for (item in results) {
+                        val row = JSONObject()
+                            .put("bssid", item.macAddress?.toString() ?: "")
+                            .put("status", item.status)
+                        if (item.status == RangingResult.STATUS_SUCCESS) {
+                            row.put("distance_mm", item.distanceMm)
+                                .put("distance_std_mm", item.distanceStdDevMm)
+                                .put("rssi_dbm", item.rssi)
+                                .put("ranging_t_ms", item.rangingTimestampMillis)
+                            log("RTT ${item.macAddress}: ${item.distanceMm / 1000.0} m")
+                        } else log("RTT ${item.macAddress}: Status ${item.status}")
+                        rows.put(row)
+                    }
+                    store.write("rtt_results", JSONObject().put("results", rows))
+                }
+            })
+        } catch (e: Exception) { log("RTT-Startfehler: ${e.message}") }
+    }
+
+    private fun startMotion() {
+        if (recording) return
+        ensureSession()
+        recording = true
+        var count = 0
+        for (id in listOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE,
+            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_MAGNETIC_FIELD,
+            Sensor.TYPE_LINEAR_ACCELERATION, Sensor.TYPE_GAME_ROTATION_VECTOR)) {
+            val sensor = sensors.getDefaultSensor(id)
+            if (sensor != null && sensors.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)) count++
+        }
+        store.write("motion_start", JSONObject().put("sensor_count", count))
+        handler.post(linkSampler)
+        status.text = "IMU-Aufzeichnung läuft"
+        log("IMU gestartet: $count Sensoren")
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (!recording) return
+        store.write("imu", JSONObject()
+            .put("sensor_type", event.sensor.type)
+            .put("sensor_t_ns", event.timestamp)
+            .put("accuracy", event.accuracy)
+            .put("values", SessionStore.floatArray(event.values)))
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        if (recording && sensor != null)
+            store.write("sensor_accuracy", JSONObject().put("sensor_type", sensor.type).put("accuracy", accuracy))
+    }
+
+    private fun logConnectedWifi() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val nc = cm.getNetworkCapabilities(cm.activeNetwork)
+            val info = nc?.transportInfo as? WifiInfo
+            if (nc?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && info != null) {
+                store.write("wifi_link", JSONObject()
+                    .put("rssi_dbm", info.rssi)
+                    .put("frequency_mhz", info.frequency)
+                    .put("tx_speed_mbps", info.txLinkSpeedMbps)
+                    .put("rx_speed_mbps", info.rxLinkSpeedMbps))
+            }
+        } catch (e: Exception) { log("Link-Fehler: ${e.message}") }
+    }
+
+    private fun stopMotion() {
+        recording = false
+        sensors.unregisterListener(this)
+        handler.removeCallbacks(linkSampler)
+        store.stop()
+        status.text = "Aufzeichnung beendet"
+        log("Aufzeichnung gestoppt")
+    }
+
+    private fun exportJsonl() {
+        if (store.currentFile == null) { log("Noch keine Daten"); return }
+        store.flush()
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/x-ndjson"
+            putExtra(Intent.EXTRA_TITLE, store.currentFile!!.name)
+        }
+        startActivityForResult(intent, exportCode)
+    }
+
+    @Deprecated("Uses Android platform activity callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != exportCode || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        val file = store.currentFile ?: return
+        try {
+            store.flush()
+            val output = contentResolver.openOutputStream(uri) ?: error("Export stream unavailable")
+            output.use { destination -> FileInputStream(file).use { it.copyTo(destination) } }
+            log("Export OK: ${file.name}")
+        } catch (e: Exception) { log("Export fehlgeschlagen: ${e.message}") }
+    }
+
+    override fun onDestroy() {
+        stopMotion()
+        if (receiverActive) unregisterReceiver(wifiReceiver)
+        super.onDestroy()
+    }
+}
