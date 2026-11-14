@@ -12,6 +12,7 @@ import android.view.View
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.CameraConfig
 import com.google.ar.core.CameraConfigFilter
+import com.google.ar.core.CameraIntrinsics
 import com.google.ar.core.Coordinates2d
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
@@ -311,9 +312,7 @@ class ArPoseTracker(
                         else Double.NaN
                     } else Double.NaN
                 } catch (_: Exception) { Double.NaN }
-                samples.put(JSONObject().put("camera_id", config.cameraId)
-                    .put("image_width", config.imageSize.width)
-                    .put("image_height", config.imageSize.height)
+                samples.put(arConfigSpec(config, samples.length())
                     .put("estimated_horizontal_fov_deg", if (horizontalFov.isFinite()) horizontalFov else JSONObject.NULL))
                 if (config.cameraId == defaultId && horizontalFov.isFinite()) defaultFov = horizontalFov
                 if (horizontalFov.isFinite() && horizontalFov > bestFov) {
@@ -340,6 +339,156 @@ class ArPoseTracker(
             report("ARCore Kameraauswahl: Standardmodus (${e.javaClass.simpleName})")
         }
         return result
+    }
+
+
+    private fun arConfigSpec(config: CameraConfig, index: Int): JSONObject {
+        val spec = JSONObject()
+            .put("index", index)
+            .put("camera_id", config.cameraId)
+            .put("facing", config.facingDirection.name)
+            .put("fps_min", config.fpsRange.lower)
+            .put("fps_max", config.fpsRange.upper)
+            .put("cpu_width", config.imageSize.width)
+            .put("cpu_height", config.imageSize.height)
+            .put("gpu_width", config.textureSize.width)
+            .put("gpu_height", config.textureSize.height)
+            .put("depth_sensor_usage", config.depthSensorUsage.name)
+            .put("stereo_camera_usage", config.stereoCameraUsage.name)
+        try {
+            val manager = activity.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val ch = manager.getCameraCharacteristics(config.cameraId)
+            val physical = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val focals = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val active = ch.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            val focalArr = JSONArray()
+            focals?.forEach { focalArr.put(it.toDouble()) }
+            val physicalIds = JSONArray()
+            ch.physicalCameraIds.forEach { physicalIds.put(it) }
+            spec.put("camera2_physical_ids", physicalIds)
+                .put("camera2_focal_lengths_mm", focalArr)
+                .put("camera2_sensor_width_mm", physical?.width?.toDouble() ?: JSONObject.NULL)
+                .put("camera2_sensor_height_mm", physical?.height?.toDouble() ?: JSONObject.NULL)
+                .put("camera2_active_array_width_px", active?.width() ?: JSONObject.NULL)
+                .put("camera2_active_array_height_px", active?.height() ?: JSONObject.NULL)
+                .put("camera2_sensor_orientation_deg",
+                    ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: JSONObject.NULL)
+                .put("camera2_hardware_level",
+                    ch.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) ?: JSONObject.NULL)
+            val firstFocal = focals?.filter { it > 0f }?.minOrNull()
+            if (physical != null && firstFocal != null) {
+                val approxH = 2.0 * atan(physical.width / (2.0 * firstFocal)) * 180.0 / Math.PI
+                spec.put("camera2_estimated_full_sensor_hfov_deg", approxH)
+                    .put("camera2_fov_is_approximate", true)
+            }
+        } catch (e: Exception) {
+            spec.put("camera2_metadata_error", "${e.javaClass.simpleName}: ${e.message}")
+        }
+        return spec
+    }
+
+    private fun resetSweepCounters(nowNs: Long) {
+        sweepStartNs = nowNs
+        sweepLastCameraFrame = 0L
+        sweepFirstCameraFrame = 0L
+        sweepUniqueFrames = 0
+        sweepTrackingFrames = 0
+        sweepFirstTrackingNs = 0L
+        sweepErrors = 0
+        sweepActualIntrinsics = null
+    }
+
+    private fun recordSweepFrame(
+        cameraTimestampNs: Long, trackingState: TrackingState, nowNs: Long,
+        intrinsics: CameraIntrinsics
+    ) {
+        if (cameraTimestampNs <= 0L || cameraTimestampNs == sweepLastCameraFrame) return
+        if (sweepFirstCameraFrame == 0L) sweepFirstCameraFrame = cameraTimestampNs
+        sweepLastCameraFrame = cameraTimestampNs
+        sweepUniqueFrames++
+        if (trackingState == TrackingState.TRACKING) {
+            sweepTrackingFrames++
+            if (sweepFirstTrackingNs == 0L) sweepFirstTrackingNs = nowNs
+        }
+        if (sweepActualIntrinsics == null) {
+            val dim = intrinsics.imageDimensions
+            val focal = intrinsics.focalLength
+            val center = intrinsics.principalPoint
+            val hfov = if (focal[0] > 0f)
+                2.0 * atan(dim[0] / (2.0 * focal[0].toDouble())) * 180.0 / Math.PI
+                else -1.0
+            val vfov = if (focal[1] > 0f)
+                2.0 * atan(dim[1] / (2.0 * focal[1].toDouble())) * 180.0 / Math.PI
+                else -1.0
+            sweepActualIntrinsics = JSONObject()
+                .put("width_px", dim[0]).put("height_px", dim[1])
+                .put("fx_px", focal[0].toDouble()).put("fy_px", focal[1].toDouble())
+                .put("cx_px", center[0].toDouble()).put("cy_px", center[1].toDouble())
+                .put("effective_hfov_deg", hfov).put("effective_vfov_deg", vfov)
+                .put("note", "ARCore image intrinsics: effective rectified/cropped FoV, not full optical lens FoV")
+        }
+    }
+
+    private fun finishSweepConfig() {
+        val fps = if (sweepUniqueFrames > 1 && sweepLastCameraFrame > sweepFirstCameraFrame)
+            (sweepUniqueFrames - 1) * 1.0e9 / (sweepLastCameraFrame - sweepFirstCameraFrame)
+            else 0.0
+        val elapsedS = (SystemClock.elapsedRealtimeNanos() - sweepStartNs) / 1.0e9
+        val result = arConfigSpec(sweepConfigs[sweepIndex], sweepIndex)
+            .put("test_duration_s", elapsedS)
+            .put("unique_camera_frames", sweepUniqueFrames)
+            .put("observed_camera_fps", fps)
+            .put("tracking_frames", sweepTrackingFrames)
+            .put("tracking_ratio", if (sweepUniqueFrames > 0)
+                sweepTrackingFrames.toDouble() / sweepUniqueFrames else 0.0)
+            .put("time_to_first_tracking_s", if (sweepFirstTrackingNs != 0L)
+                (sweepFirstTrackingNs - sweepStartNs) / 1.0e9 else JSONObject.NULL)
+            .put("frame_errors", sweepErrors)
+            .put("actual_ar_intrinsics", sweepActualIntrinsics ?: JSONObject.NULL)
+            .put("result", if (sweepUniqueFrames == 0) "no_frames" else "sampled")
+        store.write("ar_camera_config_test", result)
+        report("Kamera ${sweepIndex + 1}/${sweepConfigs.size}: ${sweepUniqueFrames} Frames, " +
+            "%.1f".format(fps) + " FPS, Tracking ${sweepTrackingFrames}/${sweepUniqueFrames}")
+    }
+
+    /** Called only from the rendering thread, after processing the current camera frame. */
+    private fun advanceSweep() {
+        finishSweepConfig()
+        val nextIndex = sweepIndex + 1
+        if (nextIndex >= sweepConfigs.size) {
+            sweepRunning = false
+            store.write("ar_camera_sweep_stop", JSONObject()
+                .put("completed_configs", sweepConfigs.size).put("cancelled", false))
+            store.flush()
+            report("Kameratest abgeschlossen: ${sweepConfigs.size} Konfigurationen geprüft. Jetzt JSONL exportieren.")
+            activity.runOnUiThread { stop() }
+            return
+        }
+        val arSession = session ?: return
+        sweepIndex = nextIndex
+        resetSweepCounters(SystemClock.elapsedRealtimeNanos())
+        lastFrameTimestamp = 0L
+        cameraIntrinsicsReported = false
+        try {
+            arSession.pause()
+            arSession.cameraConfig = sweepConfigs[nextIndex]
+            arSession.configure(arSession.config)
+            arSession.resume()
+            store.write("ar_camera_sweep_switch", JSONObject()
+                .put("index", nextIndex)
+                .put("camera_id", sweepConfigs[nextIndex].cameraId))
+            report("Teste Kamera ${nextIndex + 1}/${sweepConfigs.size}: " +
+                "${sweepConfigs[nextIndex].imageSize.width}×${sweepConfigs[nextIndex].imageSize.height} " +
+                "@ ${sweepConfigs[nextIndex].fpsRange.lower}-${sweepConfigs[nextIndex].fpsRange.upper} fps")
+        } catch (e: Exception) {
+            store.write("ar_camera_sweep_error", JSONObject()
+                .put("index", nextIndex)
+                .put("error_type", e.javaClass.simpleName)
+                .put("message", e.message ?: ""))
+            sweepRunning = false
+            report("Konfiguration ${nextIndex + 1} konnte nicht aktiviert werden. Test abgebrochen: ${e.message}")
+            activity.runOnUiThread { stop() }
+        }
     }
 
     private fun drawPreview() {
