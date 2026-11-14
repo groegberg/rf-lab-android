@@ -1,35 +1,65 @@
-# RF Lab — Pixel 10 Pro XL
+# RF Lab Field Studio — Android
 
-Native Android research application for public Android Wi-Fi, Wi-Fi RTT, UWB capability, IMU and **optional ARCore 6DoF optical pose** capture. No root or vendor firmware modifications.
+RF Lab is a **root-free, offline Android Wi-Fi survey and spatial-measurement app**. It uses public Android APIs and optionally ARCore visual-inertial tracking and Depth. The new user-facing interface groups features into **Karte, Mesh, Raum, Indoor, Experten**; the original diagnostic tools are preserved in a separate screen.
 
-## Build
+## Build / install
 
-Every commit to `main` runs [Build RF Lab APK](.github/workflows/build-apk.yml) on GitHub Actions. Open the latest successful run and download artifact `RF-Lab-Pixel10-Debug-APK`. Unzip and install `app-debug.apk` on Pixel.
+Every push to `main` runs [Build RF Lab APK](.github/workflows/build-apk.yml) and provides a debug APK under **Artifacts → RF-Lab-Pixel10-Debug-APK**. Download the artifact, unzip and install `app-debug.apk` on Android. The APK is a development build, not Play Store production-signed. Debug-key differences between CI runs can require uninstalling an earlier APK; **export measurements before uninstalling because uninstalling removes app data**.
 
-## What is and isn't measured
+## Features
 
-- **Wi-Fi scan:** nearby BSSIDs, frequencies, received signal strength, 802.11 capabilities; scan requests are limited by Android.
-- **Wi-Fi connected link:** 1 Hz RSSI and connected BSSID/SSID *when publicly available*. Logs diagnostic entries if the phone is not actually connected to Wi-Fi. Android may redact identifiers.
-- **Wi-Fi RTT:** *peer ranging to compatible access points only*. The presence of a Wi-Fi RTT feature does not mean a nearby AP supports ranging.
-- **UWB:** hardware capability detection only; no raw channel impulse response and no peer-ranging session.
-- **IMU:** raw accelerometer, gyroscope, magnetometer and device fused rotation sensors.
-- **ARCore:** camera-based (visual-inertial) position and orientation, opt-in with camera permission and installed Google Play Services for AR; stores camera **poses only, not camera images or optical geometry**.
+### 1. Funkfeldkarte — 2D/3D Wi-Fi spatial map
 
-**No coherent Wi-Fi CSI/IQ, RF radar reflection maps, UWB CIR, material estimates, or RF-derived room geometry are collected in this version.** AR poses are optical tracking used solely to locate the sensor during Wi-Fi measurements.
+- Start a **Messfahrt**, accept precise-location and camera permissions, and keep the app foregrounded with the camera directed at a feature-rich scene.
+- Public Wi-Fi scans and once-per-second connected AP signal measurements are matched to the closest ARCore pose, accepting up to 600 ms difference.
+- Choose a specific **BSSID** in the dropdown to show its measured RSSI samples. The 2D map uses distance-limited inverse-distance interpolation **only for a selected BSSID**, only where enough spatially distributed points exist, with blank regions elsewhere.
+- The 3D button displays a **rotatable isometric projection of real 3D measurements**, not an RF-derived 3D environment. Pinch to zoom and drag to pan.
+- No phase/CSI, IQ or radio reflections are measured.
 
-## Experimental capture
+### 2. Mesh & WLAN analysis
 
-1. Enable precise location and Wi-Fi; connect the Pixel to your home network (not merely turn Wi-Fi scanning on).
-2. Grant Nearby Wi-Fi and precise location permissions, run **Hardware prüfen** and **WLAN Scan**.
-3. Start **Messfahrt (IMU + WLAN)**; automatic Wi-Fi scan requests occur at roughly 35-second intervals; connected-link RSSI is sampled once per second when available.
-4. Select **ARCore 6DoF starten**, grant camera permission, and aim the camera at textured walls / furniture. The camera preview is for navigation and is never saved.
-5. Move slowly around the room for at least 60 seconds; keep the application in the foreground. ARCore coordinates are defined relative to the current tracking session and may reset on reinitialization.
-6. Stop ARCore, stop the IMU session, export JSONL.
+- BSSID and band inventory, RSSI min/mean/max, channel occupancy **as counts of observed APs rather than measured channel utilization**, received scan counts, scan-request acceptance.
+- Roaming event listing when the connected BSSID changes.
+- **Vorher/Nachher**: load a previous measurement from the on-device local JSONL archive. Compare only the same BSSID across runs; results are not normalized for device orientation or environment.
+- Tap an AP to show it on the 2D/3D map.
 
-For RF field mapping, align each `wifi_link` and `wifi_scan` sample with nearby `ar_pose` records by the logging monotonic `t_ns`; also preserve native camera and sensor timestamps. The ARCore `frame_t_ns` timebase is not guaranteed to be directly comparable to `elapsedRealtimeNanos`.
+### 3. Raumscan — ARCore Depth optical geometry
 
-## Limitations and privacy
+- On ARCore Depth-compatible devices, the survey enables `Config.DepthMode.AUTOMATIC`.
+- Approximately once per second it samples the **raw 16-bit depth image and confidence image**, filters invalid or low-confidence points, converts them to 3D world coordinates using the ARCore camera pose and intrinsics, and stores a bounded sparse point cloud.
+- `ar_depth_points` JSONL records hold points as `[world_x, world_y, world_z, confidence]` in meters.
+- Blue dots in the room view are **optical geometry only**. This is currently a sparse point-cloud preview, not a watertight 3D mesh or room-object classifier.
+- On unsupported devices the feature gracefully falls back to AR trajectory-only or WLAN-only measurement.
 
-This is still an experimental data collection application, **not a LiDAR replacement or 3D RF scanner**. RSSI cannot yield dense centimetric geometry or dielectric material spectra without independent calibrated RF measurements. Wi-Fi scan entries with `rssi_valid=false` should be ignored for plots; Android occasionally reports implausible `0 dBm` readings.
+### 4. Indoor — offline Wi-Fi fingerprint recognition
 
-Everything is stored locally and only exported on user action. Export contains nearby networks' SSIDs/BSSIDs, which can be location-sensitive. The app does not request Internet permission. Test only networks you own or are authorized to measure.
+- Stand at a known location, trigger a fresh WLAN scan, name the place and save the BSSID-to-RSSI fingerprint locally.
+- With ≥3 overlapping BSSIDs, the app compares the new scan to all stored anchors using mean-square RSSI differences with missing-AP penalties.
+- Shows the best-matching **named known place**, overlap count, and alternatives; it **does not claim metric positioning accuracy**.
+- Anchor names and fingerprints persist in private Android app storage across restarts. Uninstalling the app removes these entries. They are not sent to any server.
+- Profiles can degrade after router changes, moving between bands or changing phone model.
+
+### 5. Experten / Diagnose
+
+The previous RF Lab UI remains available via **Erweiterte Diagnoseansicht öffnen**, including hardware capabilities, Wi-Fi 7 metadata, MLO, RTT probing, 10-second scan diagnostics, raw IMU and the 9-config ARCore camera sweep. It is intentionally separate from the main measurement workflow.
+
+## Compatibility and privacy
+
+- Minimum Android SDK: 31 (Android 12); ARCore and Depth **are optional**.
+- Needs WLAN plus precise location and system location enabled for Wi-Fi scans. ARCore camera permission is only needed for the 3D features.
+- No root; no vendor-private APIs; no Internet permission.
+- Local raw JSONL exports contain SSIDs/BSSIDs and 3D trajectories. Treat them as location-sensitive.
+- Wi-Fi scan throttling and cached results remain Android-dependent; `wifi_scan.updated=false` results are excluded from spatial sampling.
+- Each ARCore restart creates a new local coordinate frame: paths from different tracking sessions are **not silently fused**. A future registration step is required to align separate sessions reliably.
+
+## Recording / basic test plan
+
+1. Open RF Lab, start a new measurement, grant permissions. Camera will be shown if ARCore starts; phone can also collect Wi-Fi-only results.
+2. Hold the device with enough light and move slowly through at least several meters. Let the first Wi-Fi scan finish. Leave the app in foreground.
+3. Stop measurement and inspect the **Karte** tab; select the AP whose signal you want to interpolate. Toggle 2D or 3D.
+4. Open **Raum** to inspect the optical point cloud if Depth is supported.
+5. Open **Mesh** to review APs and roam events; optionally load a previous measurement for comparison.
+6. In **Indoor**, collect named reference fingerprints and retake a fresh scan to identify the nearest known reference.
+7. Use **Experten** for low-level diagnostics, or export the JSONL file for external scientific processing.
+
+The project is deliberately honest about limitations: it does **not** identify hidden objects, reconstruct RF reflection fields, or infer material properties from RSSI alone. The optical geometry and radio measurements are separate sources synchronized to a shared *local* pose frame.
