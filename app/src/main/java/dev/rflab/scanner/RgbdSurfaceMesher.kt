@@ -19,14 +19,17 @@ data class RgbdSurfaceMesh(
     val uvs: FloatArray,
     val triangles: ShortArray,
     val measuredVertices: Int,
-    val estimatedVertices: Int
+    val estimatedVertices: Int,
+    val multiviewConfirmed: Int = 0,
+    val multiviewRejected: Int = 0
 ) {
     val vertexCount get() = positions.size / 3
     val triangleCount get() = triangles.size / 3
 }
 
 object RgbdSurfaceMesher {
-    fun build(frame: StoredRgbdKeyframe, targetVertices: Int = 11_000): RgbdSurfaceMesh {
+    fun build(frame: StoredRgbdKeyframe, targetVertices: Int = 11_000,
+              neighbors: List<StoredRgbdKeyframe> = emptyList()): RgbdSurfaceMesh {
         val w = frame.width
         val h = frame.height
         if (w < 2 || h < 2 || !frame.fx.isFinite() || !frame.fy.isFinite() ||
@@ -53,6 +56,8 @@ object RgbdSurfaceMesher {
         var count = 0
         var measured = 0
         var estimated = 0
+        var confirmed = 0
+        var rejected = 0
 
         fun millimeters(bytes: ByteArray, pixel: Int): Int {
             val i = pixel * 2
@@ -79,6 +84,21 @@ object RgbdSurfaceMesher {
             val wy = m[1] * px + m[5] * py + m[9] * pz + m[13]
             val wz = m[2] * px + m[6] * py + m[10] * pz + m[14]
             if (!wx.isFinite() || !wy.isFinite() || !wz.isFinite()) continue
+
+            val evidence = if (neighbors.isNotEmpty())
+                MultiviewDepthConsistency.check(wx, wy, wz, frame, neighbors)
+                else null
+            val contradicted = if (rawValid)
+                evidence != null && evidence.rawConflicts > 0 &&
+                    evidence.rawMatches == 0
+                else evidence?.verdict ==
+                    MultiviewDepthConsistency.Result.CONTRADICTED
+            if (contradicted) {
+                rejected++
+                continue
+            }
+            if (evidence?.verdict == MultiviewDepthConsistency.Result.CONFIRMED)
+                confirmed++
 
             // The camera JPEG can cover a smaller crop than ARCore depth.
             // Reject untexturable vertices instead of stretching edge colours.
@@ -139,6 +159,6 @@ object RgbdSurfaceMesher {
             triangle(tr, bl, br)
         }
         return RgbdSurfaceMesh(pos.copyOf(count * 3), uv.copyOf(count * 2),
-            faces.copyOf(faceCount), measured, estimated)
+            faces.copyOf(faceCount), measured, estimated, confirmed, rejected)
     }
 }
