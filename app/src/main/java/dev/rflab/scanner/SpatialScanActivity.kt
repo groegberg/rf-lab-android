@@ -233,10 +233,15 @@ class SpatialScanActivity : Activity() {
         popup.menu.add(0, 1, 0, "3D-Mesh ansehen")
         popup.menu.add(0, 2, 1, "RGB-D-Rohdaten exportieren")
         popup.menu.add(0, 3, 2, "Scan-Diagnose")
+        popup.menu.add(0, 4, 3, "5 Tiefenverfahren vergleichen")
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 1 -> openSurface()
                 2 -> exportKeyframes()
+                4 -> {
+                    if (active) stopCapture(true)
+                    startActivity(Intent(this, DepthComparisonActivity::class.java))
+                }
                 3 -> {
                     val latest = ar.latestRgbdStats
                     AlertDialog.Builder(this)
