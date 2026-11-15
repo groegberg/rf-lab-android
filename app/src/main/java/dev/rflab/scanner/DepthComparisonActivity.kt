@@ -264,7 +264,12 @@ internal object DepthRasterVisual {
     private fun aligned(frame: StoredRgbdKeyframe, w: Int, h: Int,
                         colors: IntArray): Bitmap {
         val dstW = 320
-        val dstH = (dstW * h / w).coerceAtLeast(1)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(frame.imageJpeg, 0,
+            frame.imageJpeg.size, bounds)
+        val imageW = bounds.outWidth.takeIf { it > 0 } ?: w
+        val imageH = bounds.outHeight.takeIf { it > 0 } ?: h
+        val dstH = (dstW * imageH / imageW).coerceAtLeast(1)
         val c = frame.uvImageCorners
         val ax = c[2] - c[0]; val ay = c[3] - c[1]
         val bx = c[4] - c[0]; val by = c[5] - c[1]
