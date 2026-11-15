@@ -1,3 +1,13 @@
+# RF Lab Guided Spatial Home v0.5.0
+
+**New beginner-first setup:** Camera + ARCore **live 3D room scan** → mark rooms on the scanned top-down cloud → spatial Wi-Fi, magnetic and acoustic measurements → map APs, smart lamps and plugs → plan safe simulation-only automations.
+
+This version stores a real **sparse ARCore optical Depth point cloud** (height-colored, not phototextured) with tracking path and a stable frame for user-drawn room rectangles. It supports room-level magnetometer and chirp echo fingerprints, optional measured AP BSSID association, and comprehensive JSON home/scan/profile backup. Alexa is still a nonconnected contract prototype and no physical device is switched.
+
+**Start here:** [v0.5.0 Guided Scan & Testing](docs/GUIDED_SCAN_V050.md).
+
+---
+
 # RF Lab Spatial Home v0.4.0
 
 **New default screen: HOME / WOHNUNG / EINMESSEN / AUTOMATION / LAB / EXPERTEN.**
