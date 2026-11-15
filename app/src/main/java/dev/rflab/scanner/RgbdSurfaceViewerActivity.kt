@@ -12,7 +12,9 @@ import android.os.Bundle
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.widget.Button
-import android.widget.LinearLayout
+import android.view.Gravity
+import android.widget.FrameLayout
+import android.graphics.drawable.GradientDrawable
 import android.widget.TextView
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -39,37 +41,48 @@ class RgbdSurfaceViewerActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.rgb(10, 21, 34)
         window.navigationBarColor = Color.rgb(10, 21, 34)
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(10, 21, 34))
+        val layout = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(9, 17, 29))
         }
         setContentView(layout)
-        layout.addView(TextView(this).apply {
-            text = "3D-OBERFLÄCHEN · KAMERATEXTUR"
-            textSize = 19f
-            setTextColor(Color.WHITE)
-            setPadding(16, 20, 16, 8)
-        })
-        status = TextView(this).apply {
-            text = "Kalibrierte RGB-D-Frames werden lokal verarbeitet …"
-            textSize = 12f
-            setTextColor(Color.rgb(175, 216, 235))
-            setPadding(16, 2, 16, 10)
-        }
-        layout.addView(status)
         surface = RgbdSurfaceView(this)
-        layout.addView(surface, LinearLayout.LayoutParams(-1, 0, 1f))
+        layout.addView(surface, FrameLayout.LayoutParams(-1, -1))
+        fun pill(color: Int) = GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = 30f
+        }
         layout.addView(TextView(this).apply {
-            text = "Ziehen: drehen · Zwei Finger: zoomen. Nur beobachtete Flächen; " +
-                "interpolierte Tiefenwerte sind keine bestätigten Messwerte."
-            textSize = 11f
-            setTextColor(Color.rgb(168, 194, 213))
-            setPadding(16, 8, 16, 10)
+            text = "3D  ·  MODELL"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            background = pill(Color.argb(220, 12, 28, 41))
+            setPadding(26, 15, 26, 15)
+        }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+            topMargin = 24; leftMargin = 24
         })
         layout.addView(Button(this).apply {
-            text = "Zurück zum Scan"
             isAllCaps = false
+            text = "✕"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            background = pill(Color.argb(225, 24, 53, 67))
             setOnClickListener { finish() }
+            contentDescription = "3D-Modell schließen"
+        }, FrameLayout.LayoutParams(120, 112, Gravity.TOP or Gravity.END).apply {
+            topMargin = 16; rightMargin = 20
+        })
+        status = TextView(this).apply {
+            text = "Prüfe Tiefen aus mehreren Blickwinkeln …"
+            textSize = 12f
+            setTextColor(Color.rgb(202, 239, 238))
+            background = pill(Color.argb(225, 12, 28, 41))
+            setPadding(24, 18, 24, 18)
+            maxLines = 3
+        }
+        layout.addView(status, FrameLayout.LayoutParams(
+            -1, -2, Gravity.BOTTOM).apply {
+            bottomMargin = 24; leftMargin = 20; rightMargin = 20
         })
 
         val archive = RgbdKeyframeArchive(this)
