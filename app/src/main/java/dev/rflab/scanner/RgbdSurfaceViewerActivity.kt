@@ -94,6 +94,7 @@ class RgbdSurfaceViewerActivity : Activity() {
         }
 
         Thread({
+            val planes = StructuralPlaneFitter.detect(RoomScanStore(this).points())
             val stride = ceil(files.size.toDouble() / MAX_PREVIEW_FRAMES).toInt()
                 .coerceAtLeast(1)
             val loadedFrames = files.indices.step(stride).take(MAX_PREVIEW_FRAMES)
@@ -102,6 +103,7 @@ class RgbdSurfaceViewerActivity : Activity() {
             var triangles = 0
             var confirmed = 0
             var rejected = 0
+            var planar = 0
             for (frame in loadedFrames) {
                 if (isFinishing || isDestroyed) break
                 val fx = frame.cameraWorld[12]
@@ -115,17 +117,20 @@ class RgbdSurfaceViewerActivity : Activity() {
                         val dz = it.cameraWorld[14] - fz
                         dx * dx + dy * dy + dz * dz
                     }.take(6).toList()
-                val mesh = RgbdSurfaceMesher.build(frame, neighbors = neighbors)
+                val mesh = RgbdSurfaceMesher.build(frame,
+                    neighbors = neighbors, planes = planes)
                 if (mesh.triangleCount < 2) continue
                 val bitmap = decodeScaled(frame.imageJpeg) ?: continue
                 triangles += mesh.triangleCount
                 confirmed += mesh.multiviewConfirmed
                 rejected += mesh.multiviewRejected
+                planar += mesh.planeRegularized
                 surface.enqueue(mesh, bitmap)
                 loaded++
                 val message = "3D-Mesh · $loaded/${loadedFrames.size} Bilder" +
                     " · $triangles Dreiecke" +
-                    "\nMehrbild: $confirmed bestätigt · $rejected verworfen"
+                    "\nMehrbild: $confirmed bestätigt · $rejected verworfen" +
+                    "\nEbenen: ${planes.size} erkannt · $planar korrigiert"
                 runOnUiThread { if (!isFinishing) status.text = message }
             }
             if (loaded == 0) runOnUiThread {
