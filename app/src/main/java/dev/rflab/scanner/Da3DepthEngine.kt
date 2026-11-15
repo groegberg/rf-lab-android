@@ -82,11 +82,14 @@ internal class Da3DepthEngine(private val context: Context) : AutoCloseable {
         val cropPercent: Float
     )
 
-    fun predict(frame: StoredRgbdKeyframe): Prediction {
+    fun predict(frame: StoredRgbdKeyframe): Prediction = predictJpeg(frame.imageJpeg)
+
+    /** Direct Camera2 photo inference: no ARCore pose/depth dependency. */
+    fun predictJpeg(jpeg: ByteArray): Prediction {
         initialize()
         val start = System.nanoTime()
         val jpeg = BitmapFactory.decodeByteArray(
-            frame.imageJpeg, 0, frame.imageJpeg.size) ?: error("Invalid RGB keyframe JPEG")
+            jpeg, 0, jpeg.size) ?: error("Invalid camera JPEG")
         val rotated = if (jpeg.width > jpeg.height) {
             val m = Matrix().apply { postRotate(90f) }
             Bitmap.createBitmap(jpeg, 0, 0, jpeg.width, jpeg.height, m, true)
