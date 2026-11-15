@@ -395,7 +395,12 @@ class SpatialHomeActivity : Activity() {
             ), 8)
             home.devices.filter { it.roomId == r.id }.forEach { device ->
                 add(item, text(device.type.uppercase(Locale.GERMAN) +
-                    "  ·  " + device.name, 12.6f, white, true), 12)
+                    "  ·  " + device.name +
+                    if (device.bssid.isNotBlank()) " · " + device.bssid.takeLast(8) else "",
+                    12.6f, white, true), 12)
+                if (device.type == "Access Point") add(item,
+                    action("WLAN-BSSID zuordnen", { chooseAccessPointBssid(device) }),
+                    marginTop = 7)
                 add(item, actions(
                     action("Auf Karte setzen") {
                         placingDeviceId = device.id
@@ -473,10 +478,37 @@ class SpatialHomeActivity : Activity() {
                         else {
                             placingDeviceId = d.id
                             selectedRoomId = room.id
+                            if (type == "Access Point") chooseAccessPointBssid(d)
                         }
                         render()
                     }.show()
             }.show()
+    }
+
+
+    private fun chooseAccessPointBssid(device: HomeDevice) {
+        val known = home.anchors.flatMap { anchor ->
+            anchor.sweeps.flatMap { sweep ->
+                sweep.readings.keys.map { bssid ->
+                    bssid to (sweep.ssids[bssid] ?: "")
+                }
+            }
+        }.groupBy { it.first }.map { (bssid, all) ->
+            bssid to (all.lastOrNull { it.second.isNotBlank() }?.second ?: "")
+        }.sortedWith(compareBy({ it.second }, { it.first }))
+        val labels = listOf("Später zuordnen") + known.map { (bssid, ssid) ->
+            (if (ssid.isBlank()) "Unbekannt" else ssid.take(22)) +
+                " · " + bssid.takeLast(8)
+        }
+        AlertDialog.Builder(this).setTitle("AP mit gemessener BSSID verknüpfen")
+            .setMessage("WLAN-BSSIDs sind Funkinterfaces, nicht zwingend " +
+                "eindeutige physische Router. Ein Mesh-Knoten kann mehrere BSSIDs haben.")
+            .setItems(labels.toTypedArray()) { _, index ->
+                device.bssid = if (index == 0) "" else known[index - 1].first
+                home.save()
+                render()
+            }
+            .setNegativeButton("Abbrechen", null).show()
     }
 
     private fun measurePage() {
