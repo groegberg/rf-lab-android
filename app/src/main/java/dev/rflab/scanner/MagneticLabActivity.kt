@@ -28,6 +28,10 @@ class MagneticLabActivity : Activity(), SensorEventListener {
     private lateinit var sensors: SensorManager
     private var selected: Sensor? = null
     private var recording = false
+    private lateinit var home: SpatialHomeStore
+    private lateinit var profiles: SpatialSensorsStore
+    private var selectedRoomId: String? = null
+    private lateinit var roomLabel: TextView
     private val samples = mutableListOf<MagneticSample>()
     private lateinit var status: TextView
     private lateinit var button: Button
@@ -39,6 +43,9 @@ class MagneticLabActivity : Activity(), SensorEventListener {
         super.onCreate(state)
         window.statusBarColor = Color.rgb(13, 24, 37)
         window.navigationBarColor = Color.rgb(13, 24, 37)
+        home = SpatialHomeStore(this)
+        profiles = SpatialSensorsStore(this)
+        selectedRoomId = intent.getStringExtra("room_id") ?: home.rooms.firstOrNull()?.id
         sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         selected = sensors.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED)
             ?: sensors.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
@@ -51,6 +58,13 @@ class MagneticLabActivity : Activity(), SensorEventListener {
         fun text(value: String, size: Float, color: Int = Color.WHITE): TextView =
             TextView(this).apply { this.text = value; textSize = size; setTextColor(color) }
         root.addView(text("RF LAB / MAGNETIC LAB", 20f))
+        roomLabel = text("Raum: " + (home.room(selectedRoomId)?.name ?: "nicht ausgewählt"), 12.4f)
+        root.addView(roomLabel)
+        root.addView(Button(this).apply {
+            text = "Raum auswählen"
+            isAllCaps = false
+            setOnClickListener { selectRoom() }
+        })
         root.addView(text("3-Achsen-Magnetfeld in Mikrotesla · echte Sensorwerte",
             12f, Color.rgb(151, 190, 211)))
         status = text("Initialisierung …", 13f)
@@ -71,6 +85,11 @@ class MagneticLabActivity : Activity(), SensorEventListener {
             }
         }
         root.addView(button)
+        root.addView(Button(this).apply {
+            text = "Magnetfeldprofil im Raum speichern"
+            isAllCaps = false
+            setOnClickListener { saveRoomProfile() }
+        })
         root.addView(Button(this).apply {
             text = "CSV exportieren"
             isAllCaps = false
@@ -131,6 +150,52 @@ class MagneticLabActivity : Activity(), SensorEventListener {
             if (recording) "AUFNAHME" else "Live-Vorschau",samples.size,
             if (s.biasX != null) " · Rohsensor + Bias" else " · kalibriert")
     }
+
+    private fun selectRoom() {
+        if (home.rooms.isEmpty()) {
+            android.widget.Toast.makeText(this, "Bitte zuerst Räume im Scan definieren.",
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        android.app.AlertDialog.Builder(this).setTitle("Magnetfeld zu welchem Raum?")
+            .setItems(home.rooms.map { it.name }.toTypedArray()) { _, index ->
+                selectedRoomId = home.rooms[index].id
+                roomLabel.text = "Raum: " + home.rooms[index].name
+            }.show()
+    }
+
+    private fun saveRoomProfile() {
+        val id = selectedRoomId
+        if (id == null || home.room(id) == null || samples.size < 15) {
+            android.widget.Toast.makeText(this,
+                "Zuerst Raum wählen und mindestens 15 Messwerte aufnehmen.",
+                android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        recording = false
+        button.text = "Aufnahme starten"
+        fun median(values: List<Double>): Double {
+            val sorted = values.sorted()
+            return sorted[sorted.size / 2]
+        }
+        val x = median(samples.map { it.x.toDouble() })
+        val y = median(samples.map { it.y.toDouble() })
+        val z = median(samples.map { it.z.toDouble() })
+        val magnitudes = samples.map {
+            sqrt((it.x * it.x + it.y * it.y + it.z * it.z).toDouble())
+        }
+        val avg = magnitudes.average()
+        val variance = magnitudes.sumOf { (it - avg) * (it - avg) } / magnitudes.size
+        profiles.addMag(MagneticRoomProfile(id, System.currentTimeMillis(),
+            x, y, z, kotlin.math.sqrt(variance), samples.size,
+            if (selected?.type == Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED)
+                "Android uncalibrated XYZ in device frame"
+            else "Android calibrated XYZ in device frame"))
+        android.widget.Toast.makeText(this,
+            "Magnetfeldprofil für " + home.room(id)?.name + " gespeichert.",
+            android.widget.Toast.LENGTH_LONG).show()
+    }
+
     private fun exportCsv() {
         if (samples.isEmpty()) {
             android.widget.Toast.makeText(this, "Noch keine Messwerte aufgenommen.",
