@@ -198,6 +198,9 @@ class SpatialSetupActivity : Activity() {
                 add(body, button("Kameratexturiertes 3D-Mesh  ›") {
                     startActivity(Intent(this, RgbdSurfaceViewerActivity::class.java))
                 }, bottom = 9)
+                add(body, button("5 Tiefenverfahren vergleichen  ›", true) {
+                    startActivity(Intent(this, DepthComparisonActivity::class.java))
+                }, bottom = 10)
             }
         } else {
             add(body, label("Bewege die Kamera langsam durch den Raum.",
