@@ -683,11 +683,14 @@ class SpatialHomeActivity : Activity() {
         }, 12)
         add(content, box, bottom = 12)
         val future = card("PHYSICS LAB",
-            "Akustische Echoanalyse, Magnetfeldmessungen, adaptive Messplanung und " +
-                "Sensorfusion sind als eigenständige experimentelle Module vorgesehen.")
-        add(future, text("Für diese Version liegt der Schwerpunkt auf einer nachvollziehbaren " +
-            "RF-Raumlokalisierung. Es werden noch keine nicht vorhandenen Sonar- oder " +
-            "KI-Depth-Funktionen als aktiv angezeigt.", 12.3f, quiet))
+            "Experimentelle Magnetfeldmessung ist bereits verfügbar. " +
+                "Akustische Echoanalyse, adaptive Messplanung und Sensorfusion folgen.")
+        add(future, action("Magnetic Lab · Live-3D-Magnetometer", true) {
+            startActivity(Intent(this, MagneticLabActivity::class.java))
+        }, 9)
+        add(future, text("Die Messung liefert echte X/Y/Z-Magnetfeldwerte samt CSV, " +
+            "noch keine automatisch verortete Magnetfeldkarte. " +
+            "Aktives Sonar und KI-Depth werden nicht als fertig angezeigt.", 12.3f, quiet), 9)
         add(content, future)
     }
 
