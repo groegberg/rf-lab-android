@@ -137,6 +137,21 @@ replace(cam,
 replace(cam,"mPreviewRequestBuilder!!.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, -2)",
             "mPreviewRequestBuilder!!.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 0)")
 replace(cam,
+    'mPreviewRequestBuilder!!.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 0)',
+    '''mPreviewRequestBuilder!!.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 0)
+                // Disable EIS/OIS when the device supports it: a changing
+                // optical centre invalidates fixed camera-to-IMU calibration.
+                try {
+                    mPreviewRequestBuilder!!.set(
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                    mPreviewRequestBuilder!!.set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                }catch(e:Exception){
+                    Log.w(TAG,"Cannot disable camera stabilization: "+e.message)
+                }''')
+replace(cam,
     "        calcPreviewSize(width, height)",
     "        calcPreviewSize(width, height)\n        writeApproximateCameraIntrinsics()")
 calib_method=r'''
@@ -147,7 +162,8 @@ calib_method=r'''
             val id=mCameraID?:return
             val info=manager.getCameraCharacteristics(id)
             val intr=info.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)?:return
-            val active=info.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?:return
+            val active=info.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+                ?:info.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?:return
             if(intr.size<4 || active.width()<=0 || active.height()<=0 ||
                mPreviewSize.width<=0 || mPreviewSize.height<=0)return
             val sw=active.width().toDouble()
