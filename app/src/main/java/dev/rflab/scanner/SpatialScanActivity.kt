@@ -11,9 +11,12 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.content.res.Configuration
+import android.graphics.drawable.GradientDrawable
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
@@ -33,7 +36,7 @@ class SpatialScanActivity : Activity() {
     private lateinit var cloud: ScanCloudView
     private lateinit var archive: RgbdKeyframeArchive
     private lateinit var surfaceButton: Button
-    private lateinit var exportButton: Button
+    private lateinit var more: Button
     private lateinit var stats: TextView
     private lateinit var guidance: TextView
     private lateinit var start: Button
@@ -53,10 +56,23 @@ class SpatialScanActivity : Activity() {
     private fun text(value: String, size: Float, color: Int = Color.WHITE): TextView =
         TextView(this).apply { text = value; textSize = size; setTextColor(color) }
 
+    private val bg = Color.rgb(9, 17, 29)
+    private val accent = Color.rgb(64, 221, 181)
+
+    private fun chip(color: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(14).toFloat()
+    }
+
+    private fun floatingLabel(value: String): TextView = text(value, 11f).apply {
+        background = chip(Color.argb(208, 9, 21, 32))
+        setPadding(dp(12), dp(7), dp(12), dp(7))
+    }
+
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        window.statusBarColor = Color.rgb(10, 21, 34)
-        window.navigationBarColor = Color.rgb(10, 21, 34)
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
         scan = RoomScanStore(this)
         store = SessionStore(this)
         archive = RgbdKeyframeArchive(this)
@@ -66,78 +82,116 @@ class SpatialScanActivity : Activity() {
             { points, _ -> scan.addDepth(points) },
             { frame -> archive.submit(frame) }
         )
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(14), dp(12), dp(12))
-            setBackgroundColor(Color.rgb(10, 21, 34))
+            setBackgroundColor(bg)
         }
         setContentView(root)
-        root.addView(text("01   /   RAUM IN 3D ERFASSEN", 20f), LinearLayout.LayoutParams(-1, dp(36)))
-        root.addView(text("Kamera + ARCore Depth · ohne Root · optische Geometrie",
-            11.8f, Color.rgb(163, 192, 213)))
-        guidance = text("Bewege das Pixel langsam an Wänden und Möbeln entlang. " +
-            "Halte sichtbare, strukturierte Flächen im Bild. Bei Dunkelheit ist 3D-Tracking schwierig.",
-            12.5f, Color.rgb(211, 231, 244))
-        root.addView(guidance, LinearLayout.LayoutParams(-1, dp(66)))
-        val content = ScrollView(this).apply { isFillViewport = true }
-        val stack = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(stack)
-        root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
-        val cap = text("LIVE-KAMERA", 12f, Color.rgb(94, 206, 242))
-        stack.addView(cap)
-        val cameraContainer = LinearLayout(this).apply {
-            setBackgroundColor(Color.rgb(17, 39, 58))
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(15), 0, dp(8), 0)
         }
-        stack.addView(cameraContainer, LinearLayout.LayoutParams(-1, dp(235)))
-        cameraContainer.addView(ar, LinearLayout.LayoutParams(-1, -1))
-        val label = text("RGB-D-PUNKTWOLKE · KAMERAFARBEN",
-            12f, Color.rgb(94, 206, 242))
-        val spacer = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(11) }
-        stack.addView(label, spacer)
+        header.addView(text("RF LAB  /  SCAN", 17f).apply {
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        more = Button(this).apply {
+            isAllCaps = false
+            text = "⋮"
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.TRANSPARENT)
+            setOnClickListener { showMore() }
+            contentDescription = "Weitere Scan-Optionen"
+        }
+        header.addView(more, LinearLayout.LayoutParams(dp(55), dp(52)))
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(54)))
+
+        // Two always-visible canvases; no ScrollView consumes camera/map space.
+        val landscape = resources.configuration.orientation ==
+            Configuration.ORIENTATION_LANDSCAPE
+        val viewport = LinearLayout(this).apply {
+            orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        }
+        root.addView(viewport, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val cameraPane = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(15, 25, 37))
+        }
+        viewport.addView(cameraPane, if (landscape)
+            LinearLayout.LayoutParams(0, -1, .58f) else
+            LinearLayout.LayoutParams(-1, 0, .58f))
+        cameraPane.addView(ar, FrameLayout.LayoutParams(-1, -1))
+        cameraPane.addView(floatingLabel("LIVE  ·  KAMERA"),
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+                topMargin = dp(12); leftMargin = dp(12)
+            })
+        stats = floatingLabel("Tracking wird gestartet")
+        cameraPane.addView(stats, FrameLayout.LayoutParams(
+            -2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(12); rightMargin = dp(12)
+        })
+        guidance = floatingLabel("Bewege das Smartphone langsam seitwärts.")
+        guidance.setTextColor(Color.rgb(209, 235, 237))
+        guidance.maxLines = 2
+        cameraPane.addView(guidance, FrameLayout.LayoutParams(
+            -1, -2, Gravity.BOTTOM).apply {
+            leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(12)
+        })
+
+        val mapPane = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(12, 25, 38))
+        }
+        viewport.addView(mapPane, if (landscape)
+            LinearLayout.LayoutParams(0, -1, .42f) else
+            LinearLayout.LayoutParams(-1, 0, .42f))
         cloud = ScanCloudView(this).apply { store = scan }
-        stack.addView(cloud, LinearLayout.LayoutParams(-1, dp(300)))
+        mapPane.addView(cloud, FrameLayout.LayoutParams(-1, -1))
+        mapPane.addView(floatingLabel("3D  ·  KARTE"),
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+                leftMargin = dp(12); topMargin = dp(12)
+            })
         colors = Button(this).apply {
             isAllCaps = false
-            text = "Ansicht: Kamerafarben"
+            text = "RGB"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = chip(Color.argb(230, 23, 56, 71))
             setOnClickListener {
                 cloud.showCameraColors = !cloud.showCameraColors
-                text = if (cloud.showCameraColors) "Ansicht: Kamerafarben"
-                       else "Ansicht: Höhenfarben"
+                text = if (cloud.showCameraColors) "RGB" else "Höhe"
             }
+            contentDescription = "Zwischen Kamera- und Höhenfarben wechseln"
         }
-        stack.addView(colors, LinearLayout.LayoutParams(-1, dp(48)))
+        mapPane.addView(colors, FrameLayout.LayoutParams(dp(65), dp(38),
+            Gravity.TOP or Gravity.END).apply {
+            rightMargin = dp(12); topMargin = dp(10)
+        })
         surfaceButton = Button(this).apply {
             isAllCaps = false
-            text = "Kameratexturiertes 3D-Mesh ansehen"
-            setOnClickListener {
-                if (active) stopCapture(true)
-                startActivity(Intent(this@SpatialScanActivity,
-                    RgbdSurfaceViewerActivity::class.java))
-            }
+            text = "3D-Mesh  ›"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = chip(Color.argb(235, 24, 55, 74))
+            setOnClickListener { openSurface() }
         }
-        stack.addView(surfaceButton, LinearLayout.LayoutParams(-1, dp(52)))
-        exportButton = Button(this).apply {
-            isAllCaps = false
-            text = "RGB-D-Rohdaten sichern (.zip)"
-            setOnClickListener {
-                if (active) stopCapture(true)
-                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "application/zip"
-                    putExtra(Intent.EXTRA_TITLE, "rflab_rgbd_v070_keyframes.zip")
-                }
-                startActivityForResult(intent, rgbdExportRequest)
-            }
+        mapPane.addView(surfaceButton, FrameLayout.LayoutParams(dp(117), dp(42),
+            Gravity.BOTTOM or Gravity.END).apply {
+            rightMargin = dp(12); bottomMargin = dp(12)
+        })
+
+        val footer = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(12), dp(9), dp(12), dp(9))
         }
-        stack.addView(exportButton, LinearLayout.LayoutParams(-1, dp(50)))
-        stats = text("", 12f, Color.WHITE)
-        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(112)))
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         start = Button(this).apply {
             isAllCaps = false
-            text = "3D-Scan starten"
+            text = "●  Scannen"
+            textSize = 15f
+            setTextColor(bg)
+            background = chip(accent)
             setOnClickListener {
                 if (active) stopCapture(false)
                 else requestStart()
@@ -145,17 +199,64 @@ class SpatialScanActivity : Activity() {
         }
         finish = Button(this).apply {
             isAllCaps = false
-            text = "Scan sichern"
+            text = "✓  Fertig"
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            background = chip(Color.rgb(34, 58, 76))
             setOnClickListener { finishAndReturn() }
         }
-        controls.addView(start, LinearLayout.LayoutParams(0, dp(55), 1f))
-        controls.addView(finish, LinearLayout.LayoutParams(0, dp(55), 1f))
-        root.addView(controls)
-        root.addView(text("3D-Ansicht ziehen = drehen · Zwei Finger = zoomen. " +
-            "Kamerafarben stammen aus RGB, fehlende Farben aus der Höhenskala. " +
-            "Ein Raum wird erst im nächsten Schritt im Scan markiert.",
-            10.5f, Color.rgb(155, 181, 204)))
+        footer.addView(start, LinearLayout.LayoutParams(0, dp(53), 1.2f).apply {
+            rightMargin = dp(8)
+        })
+        footer.addView(finish, LinearLayout.LayoutParams(0, dp(53), 1f))
+        root.addView(footer, LinearLayout.LayoutParams(-1, dp(72)))
         refresh()
+    }
+
+    private fun openSurface() {
+        if (active) stopCapture(true)
+        startActivity(Intent(this, RgbdSurfaceViewerActivity::class.java))
+    }
+
+    private fun exportKeyframes() {
+        if (active) stopCapture(true)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/zip"
+            putExtra(Intent.EXTRA_TITLE, "rflab_rgbd_keyframes.zip")
+        }
+        startActivityForResult(intent, rgbdExportRequest)
+    }
+
+    private fun showMore() {
+        val popup = PopupMenu(this, more)
+        popup.menu.add(0, 1, 0, "3D-Mesh ansehen")
+        popup.menu.add(0, 2, 1, "RGB-D-Rohdaten exportieren")
+        popup.menu.add(0, 3, 2, "Scan-Diagnose")
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> openSurface()
+                2 -> exportKeyframes()
+                3 -> {
+                    val latest = ar.latestRgbdStats
+                    AlertDialog.Builder(this)
+                        .setTitle("Scan-Diagnose")
+                        .setMessage(
+                            "Kameraposen: " + scan.poseCount() + "\n" +
+                            "3D-Punkte: " + scan.pointCount() + "\n" +
+                            "RGB-Punkte: " + scan.coloredPointCount() + "\n" +
+                            "Raw-Punkte: " + scan.rawPointCount() + "\n" +
+                            "Raw je Frame: " + (latest?.rawCount ?: 0) + "\n" +
+                            "Full je Frame: " + (latest?.fullCount ?: 0) + "\n" +
+                            "Keyframes: " + archive.savedCount + "\n" +
+                            "Ausgelassen: " + archive.droppedCount + "\n\n" +
+                            lastMessage)
+                        .setPositiveButton("Schließen", null).show()
+                }
+            }
+            true
+        }
+        popup.show()
     }
 
     override fun onResume() {
@@ -174,23 +275,35 @@ class SpatialScanActivity : Activity() {
 
     private fun refresh() {
         if (!::stats.isInitialized) return
-        val poses = scan.poseCount()
         val points = scan.pointCount()
-        val sampled = scan.sampleFrames
-        val latest = ar.latestRgbdStats
-        stats.text = String.format(Locale.GERMAN,
-            "Posen %d · Punkte %d (RGB %d / Raw %d) · Frames %d\n" +
-            "Raw %d · Full %d · RGB %d · Keyframes %d (+%d, ausgelassen %d)\n%s",
-            poses, points, scan.coloredPointCount(), scan.rawPointCount(), sampled,
-            latest?.rawCount ?: 0, latest?.fullCount ?: 0,
-            latest?.coloredCount ?: 0, archive.savedCount,
-            archive.pendingCount, archive.droppedCount, lastMessage)
+        val poses = scan.poseCount()
+        val current = ar.latestRgbdStats
+        val raw = current?.rawCount ?: 0
+        stats.text = when {
+            active && raw > 80 -> "●  Tracking gut"
+            active && raw > 0 -> "●  Wenig Tiefe"
+            active -> "○  Tiefe suchen"
+            points > 0 -> "✓  Scan vorhanden"
+            else -> "○  Bereit"
+        }
+        stats.setTextColor(if (active && raw > 80) accent else Color.WHITE)
+        guidance.text = when {
+            active && raw < 25 ->
+                "Langsam seitwärts bewegen · Strukturierte Flächen suchen"
+            active -> archive.savedCount.toString() + " Ansichten · " +
+                points.toString() + " 3D-Punkte"
+            points > 0 -> points.toString() + " 3D-Punkte · " +
+                archive.savedCount.toString() + " Ansichten"
+            else -> "Bewege das Pixel langsam an Wänden entlang."
+        }
         cloud.invalidate()
-        start.text = if (active) "Scan beenden"
-            else if (scan.pointCount() > 0) "Neuen Scan starten" else "3D-Scan starten"
+        start.text = when {
+            active -> "■  Stoppen"
+            points > 0 -> "●  Neuer Scan"
+            else -> "●  Scannen"
+        }
         finish.isEnabled = points >= 50 && poses >= 3
         surfaceButton.isEnabled = archive.savedCount > 0
-        exportButton.isEnabled = archive.savedCount > 0
     }
 
     private fun requestStart() {
