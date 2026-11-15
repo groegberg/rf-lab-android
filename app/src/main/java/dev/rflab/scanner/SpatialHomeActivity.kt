@@ -76,6 +76,7 @@ class SpatialHomeActivity : Activity() {
     private var registered = false
     private val permissionRequest = 218
     private val homeExportRequest = 219
+    private val homeImportRequest = 220
     private val progressTask = object : Runnable {
         override fun run() {
             refreshHeader()
@@ -674,12 +675,59 @@ class SpatialHomeActivity : Activity() {
         val exports = card("DATEN & SICHERUNG")
         add(exports, text("Wohnungsmodell, Geräte, RSSI-Referenzen und lokale Testprotokolle " +
             "werden im privaten App-Speicher abgelegt.", 12.1f))
-        add(exports, action("Spatial-Home-JSON exportieren", true) { exportHome() }, 11)
+        add(exports, actions(
+            action("Backup exportieren", true) { exportHome() },
+            action("Backup importieren") { promptHomeImport() }
+        ), 11)
         add(exports, text("Wichtig: Vor der Deinstallation eines Debug-Builds exportieren. " +
             "Das Entfernen der App löscht lokale Karten und Gerätezuordnungen.", 11.3f, orange), 10)
         add(content, exports, bottom = 12)
         note("Die App hat keine Alexa-Zugriffsdaten und sendet keine Präsenzinformationen " +
             "oder Gerätepositionen an externe Server.")
+    }
+
+    private fun promptHomeImport() {
+        AlertDialog.Builder(this).setTitle("Wohnungsdaten wiederherstellen?")
+            .setMessage("Ein importiertes Backup ersetzt die aktuelle Wohnungskarte, " +
+                "alle Messpunkte, Geräte und Automationsregeln. " +
+                "Bitte vorher die aktuelle Karte exportieren.")
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("JSON auswählen") { _, _ ->
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/json"
+                }, homeImportRequest)
+            }.show()
+    }
+
+    private fun importHome(uri: android.net.Uri) {
+        try {
+            val stream = contentResolver.openInputStream(uri) ?: error("Datei nicht lesbar")
+            val bytes = stream.use { input ->
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(16_384)
+                while (true) {
+                    val n = input.read(chunk)
+                    if (n < 0) break
+                    if (buffer.size() + n > 6_000_000) error("Backup größer als 6 MB")
+                    buffer.write(chunk, 0, n)
+                }
+                buffer.toByteArray()
+            }
+            val ok = home.restoreJson(String(bytes, Charsets.UTF_8))
+            if (ok) {
+                selectedRoomId = home.rooms.firstOrNull()?.id
+                selectedAnchorId = null
+                collecting = false
+                lastEstimate = null
+                automation.reset()
+                scheduleScans()
+                toast("Wohnungskarte erfolgreich wiederhergestellt.")
+                render()
+            } else toast("Ungültiges Backup. Vorhandene Daten wurden beibehalten.")
+        } catch (e: Exception) {
+            toast("Import fehlgeschlagen: " + (e.message ?: e.javaClass.simpleName))
+        }
     }
 
     private fun exportHome() {
@@ -693,7 +741,12 @@ class SpatialHomeActivity : Activity() {
     @Deprecated("Activity result API retained for compatibility with existing app")
     override fun onActivityResult(code: Int, result: Int, data: Intent?) {
         super.onActivityResult(code, result, data)
-        if (code != homeExportRequest || result != RESULT_OK) return
+        if (result != RESULT_OK) return
+        if (code == homeImportRequest) {
+            data?.data?.let { importHome(it) }
+            return
+        }
+        if (code != homeExportRequest) return
         try {
             val uri = data?.data ?: return
             contentResolver.openOutputStream(uri)?.use {
