@@ -37,7 +37,8 @@ internal class RgbdSampler {
         try {
             val useRaw = raw != null && conf != null && raw.timestamp != lastRawTimestamp
             val useFull = full != null && full.timestamp != lastFullTimestamp
-            if (!useRaw && !useFull) return null
+            // RGB-only keyframes are valid: DA3 and photo stereo require no ARCore depth.
+            if (!useRaw && !useFull && !saveKeyframe) return null
             val intr = camera.textureIntrinsics
             val dims = intr.imageDimensions
             val focal = intr.focalLength
@@ -53,7 +54,7 @@ internal class RgbdSampler {
             if (useRaw) lastRawTimestamp = raw!!.timestamp
             if (useFull) lastFullTimestamp = full!!.timestamp
             var keyframe: RgbdKeyframeData? = null
-            if (samples.isNotEmpty()) {
+            if (samples.isNotEmpty() || saveKeyframe) {
                 // Acquire and release on ARCore GL thread: never hand an Image
                 // to the asynchronous writer, copy only immutable bytes.
                 acquire { frame.acquireCameraImage() }?.use { cpu ->
@@ -61,9 +62,13 @@ internal class RgbdSampler {
                     if (saveKeyframe && cpu.width % 2 == 0 && cpu.height % 2 == 0) {
                         val imageNv21 = copyNv21(cpu)
                         val depthImage = full ?: raw
-                        if (imageNv21 != null && depthImage != null) {
-                            val w = depthImage.width
-                            val h = depthImage.height
+                        if (imageNv21 != null) {
+                            // If ARCore depth is unavailable, retain RGB, pose,
+                            // intrinsics and completely ZERO depth arrays.
+                            // These images are usable by AI + photographic stereo.
+                            val w = depthImage?.width ?: 640
+                            val h = depthImage?.height ?: ((640f * dims[1] /
+                                dims[0]).toInt().coerceIn(180, 640) / 2 * 2)
                             val dFx = focal[0] * w / dims[0]
                             val dFy = focal[1] * h / dims[1]
                             val dCx = center[0] * w / dims[0]
@@ -74,7 +79,8 @@ internal class RgbdSampler {
                             keyframe = RgbdKeyframeData(
                                 frame.timestamp, pose, w, h, dFx, dFy, dCx, dCy,
                                 imageUvCorners, cpu.width, cpu.height, imageNv21,
-                                packDepth(depthImage),
+                                if (depthImage != null) packDepth(depthImage)
+                                else ByteArray(w * h * 2),
                                 if (raw != null && raw.width == w && raw.height == h)
                                     packDepth(raw) else ByteArray(w * h * 2),
                                 if (conf != null && conf.width == w && conf.height == h)
@@ -97,6 +103,7 @@ internal class RgbdSampler {
 
     private fun acquire(block: () -> Image): Image? =
         try { block() } catch (_: NotYetAvailableException) { null }
+        catch (_: IllegalStateException) { null }
 
     private fun sample(image: Image, confidence: Image?, raw: Boolean, target: Int,
                        dimensions: IntArray, focal: FloatArray, center: FloatArray,
