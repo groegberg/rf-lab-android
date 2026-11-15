@@ -293,6 +293,7 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                 .put("focal_lengths_mm",PhotoSessionStore.floats(focalLengths))
                 .put("motion_frame_width",640).put("motion_frame_height",480)
                 .put("requested_camera_fps_range",fpsRange?.toString())
+                .put("stabilization_request","OIS/EIS OFF when supported")
                 .put("motion_image_size_source","Camera2 YUV 640x480")
                 .put("motion_crop_mapping","approximate; field calibration required")
                 .put("camera_timestamp_source",if(realtime)"REALTIME" else "UNKNOWN")
@@ -358,6 +359,17 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                             fpsRange?.let {
                                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,it)
                             }
+                            // Image stabilizers alter the camera-to-body
+                            // calibration between frames; disable if supported.
+                            val info=manager.getCameraCharacteristics(deviceId)
+                            if(info.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                                    ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)==true)
+                                set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                            if(info.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                                    ?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)==true)
+                                set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
                         }
                         s.setRepeatingRequest(request.build(),
                             object:CameraCaptureSession.CaptureCallback(){
@@ -465,6 +477,15 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                 set(CaptureRequest.CONTROL_AF_MODE,
                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 set(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_ON)
+                val info=manager.getCameraCharacteristics(deviceId)
+                if(info.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
+                        ?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)==true)
+                    set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                        CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                if(info.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                        ?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)==true)
+                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
                 set(CaptureRequest.JPEG_ORIENTATION,rotation)
             }.build()
             s.capture(request,object:CameraCaptureSession.CaptureCallback(){
