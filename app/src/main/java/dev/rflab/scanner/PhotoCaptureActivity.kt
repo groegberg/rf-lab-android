@@ -124,6 +124,7 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         shots=storage.frames(directory).size
         val root=FrameLayout(this).apply { setBackgroundColor(dark) }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         view=TextureView(this).apply { surfaceTextureListener=this@PhotoCaptureActivity }
         root.addView(view,FrameLayout.LayoutParams(-1,-1))
         val header=LinearLayout(this).apply {
