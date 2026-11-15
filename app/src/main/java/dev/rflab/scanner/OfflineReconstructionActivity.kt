@@ -108,6 +108,7 @@ class OfflineReconstructionActivity:Activity() {
     private fun start(){
         if(running)return
         running=true
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         calculate.isEnabled=false
         details.text="Optische Rekonstruktion wird ausgeführt …"
         executor.execute{
@@ -136,6 +137,8 @@ class OfflineReconstructionActivity:Activity() {
                     calculate.text="Erneut auswerten"
                     calculate.isEnabled=true
                     running=false
+                    window.clearFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
             }catch(t:Throwable){
                 runOnUiThread{
@@ -144,12 +147,18 @@ class OfflineReconstructionActivity:Activity() {
                             (t.message?:t.javaClass.simpleName)
                         calculate.isEnabled=true
                         running=false
+                        window.clearFlags(
+                            android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                 }
             }
         }
     }
-    override fun onDestroy(){executor.shutdown();super.onDestroy()}
+    override fun onDestroy(){
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        executor.shutdown()
+        super.onDestroy()
+    }
 }
 
 /** 2D projection of relative camera centres. No metres or accurate room claim. */
