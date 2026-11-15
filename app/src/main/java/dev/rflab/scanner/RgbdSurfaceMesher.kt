@@ -21,7 +21,8 @@ data class RgbdSurfaceMesh(
     val measuredVertices: Int,
     val estimatedVertices: Int,
     val multiviewConfirmed: Int = 0,
-    val multiviewRejected: Int = 0
+    val multiviewRejected: Int = 0,
+    val planeRegularized: Int = 0
 ) {
     val vertexCount get() = positions.size / 3
     val triangleCount get() = triangles.size / 3
@@ -29,7 +30,8 @@ data class RgbdSurfaceMesh(
 
 object RgbdSurfaceMesher {
     fun build(frame: StoredRgbdKeyframe, targetVertices: Int = 11_000,
-              neighbors: List<StoredRgbdKeyframe> = emptyList()): RgbdSurfaceMesh {
+              neighbors: List<StoredRgbdKeyframe> = emptyList(),
+              planes: List<StructuralPlane> = emptyList()): RgbdSurfaceMesh {
         val w = frame.width
         val h = frame.height
         if (w < 2 || h < 2 || !frame.fx.isFinite() || !frame.fy.isFinite() ||
@@ -58,6 +60,7 @@ object RgbdSurfaceMesher {
         var estimated = 0
         var confirmed = 0
         var rejected = 0
+        var regularized = 0
 
         fun millimeters(bytes: ByteArray, pixel: Int): Int {
             val i = pixel * 2
@@ -80,9 +83,9 @@ object RgbdSurfaceMesher {
             val px = (x - frame.cx) * depth / frame.fx
             val py = (frame.cy - y) * depth / frame.fy
             val pz = -depth
-            val wx = m[0] * px + m[4] * py + m[8] * pz + m[12]
-            val wy = m[1] * px + m[5] * py + m[9] * pz + m[13]
-            val wz = m[2] * px + m[6] * py + m[10] * pz + m[14]
+            var wx = m[0] * px + m[4] * py + m[8] * pz + m[12]
+            var wy = m[1] * px + m[5] * py + m[9] * pz + m[13]
+            var wz = m[2] * px + m[6] * py + m[10] * pz + m[14]
             if (!wx.isFinite() || !wy.isFinite() || !wz.isFinite()) continue
 
             val evidence = if (neighbors.isNotEmpty())
@@ -99,6 +102,17 @@ object RgbdSurfaceMesher {
             }
             if (evidence?.verdict == MultiviewDepthConsistency.Result.CONFIRMED)
                 confirmed++
+            // Large structural planes are fitted from many independent raw
+            // samples. Only estimated Full Depth may move up to 4 cm.
+            if (!rawValid && planes.isNotEmpty()) {
+                val snapped = StructuralPlaneFitter.snap(wx, wy, wz, planes)
+                if (snapped != null) {
+                    wx = snapped[0]
+                    wy = snapped[1]
+                    wz = snapped[2]
+                    regularized++
+                }
+            }
 
             // The camera JPEG can cover a smaller crop than ARCore depth.
             // Reject untexturable vertices instead of stretching edge colours.
@@ -159,6 +173,7 @@ object RgbdSurfaceMesher {
             triangle(tr, bl, br)
         }
         return RgbdSurfaceMesh(pos.copyOf(count * 3), uv.copyOf(count * 2),
-            faces.copyOf(faceCount), measured, estimated, confirmed, rejected)
+            faces.copyOf(faceCount), measured, estimated, confirmed, rejected,
+            regularized)
     }
 }
