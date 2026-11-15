@@ -92,6 +92,7 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                               val x: Float,val y: Float,val z: Float)
     private val imuLock=Any()
     private val imu=ArrayDeque<Sample>(360)
+    private var imuRecorder: ImuStreamRecorder?=null
 
     private fun dp(n:Int)=(n*resources.displayMetrics.density+.5f).toInt()
     private fun bg(color:Int)=GradientDrawable().apply {
@@ -172,9 +173,15 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     override fun onResume() {
         super.onResume()
         closing=false
+        inFlight=false
+        jpegQueue.clear(); metadataQueue.clear()
+        lastAnalysisNs=0L
+        imuRecorder=ImuStreamRecorder(directory)
         thread=HandlerThread("RFPhotoCamera2").also{it.start()}
         handler=Handler(thread!!.looper)
-        listOf(Sensor.TYPE_GYROSCOPE,Sensor.TYPE_ACCELEROMETER).forEach{type->
+        listOf(Sensor.TYPE_GYROSCOPE,Sensor.TYPE_ACCELEROMETER,
+            Sensor.TYPE_GYROSCOPE_UNCALIBRATED,
+            Sensor.TYPE_ACCELEROMETER_UNCALIBRATED).forEach{type->
             sensors.getDefaultSensor(type)?.let {
                 sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_GAME)
             }
@@ -184,6 +191,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     override fun onPause() {
         closing=true
         sensors.unregisterListener(this)
+        try { imuRecorder?.close() } catch (_:Exception) {}
+        imuRecorder=null
         started=false
         try{session?.close()}catch(_:Exception){}
         try{camera?.close()}catch(_:Exception){}
@@ -443,9 +452,12 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         val kind=when(event.sensor.type){
             Sensor.TYPE_GYROSCOPE->"gyro"
             Sensor.TYPE_ACCELEROMETER->"accelerometer"
+            Sensor.TYPE_GYROSCOPE_UNCALIBRATED->"gyro_uncalibrated"
+            Sensor.TYPE_ACCELEROMETER_UNCALIBRATED->"accelerometer_uncalibrated"
             else->return
         }
         if(kind=="gyro")angular=sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
+        try{imuRecorder?.append(event)}catch(_:Exception){}
         synchronized(imuLock){
             imu.addLast(Sample(event.timestamp,kind,v[0],v[1],v[2]))
             while(imu.size>360)imu.removeFirst()
