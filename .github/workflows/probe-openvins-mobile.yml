@@ -11,6 +11,7 @@ on:
     branches: [experiment/openvins-live-vio-v1.2]
     paths:
       - .github/workflows/probe-openvins-mobile.yml
+      - research/openvins_pixel_test_patch.py
 
 permissions:
   contents: read
