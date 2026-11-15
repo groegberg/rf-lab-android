@@ -1,3 +1,15 @@
+# RF Lab Spatial Home v0.4.0
+
+**New default screen: HOME / WOHNUNG / EINMESSEN / AUTOMATION / LAB / EXPERTEN.**
+
+Camera-free room fingerprinting with real Android Wi-Fi RSSI scans, persistent apartment plan, mapped smart-home device aliases, conservative proximity preview, local automation simulator, JSON backup/restore, old v0.3.1 manual-survey CSV migration and experimental Magnetic Lab.
+
+**Alexa is NOT connected**: the offline Smart Home MotionSensor message contract is under `integrations/alexa/`. OAuth account linking, event gateway tokens, a deployed backend and actual Alexa routine support must be verified before any real device can be controlled.
+
+**Read first:** [Spatial Home test and implementation guide](docs/SPATIAL_HOME_V040.md). Previous Field Studio and classic expert diagnostics remain available in LAB and EXPERTEN.
+
+---
+
 # RF Lab Field Studio — Android
 
 RF Lab is a **root-free, offline Android Wi-Fi survey and spatial-measurement app**. It uses public Android APIs and optionally ARCore visual-inertial tracking and Depth. The new user-facing interface groups features into **Karte, Mesh, Raum, Indoor, Experten**; the original diagnostic tools are preserved in a separate screen.
