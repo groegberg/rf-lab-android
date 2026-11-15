@@ -30,6 +30,13 @@ replace(main,
                 .toString() + "/openvins/""",
     """        // Scoped storage: fully local sessions, no public Documents permission.
         val appRecordFolder = File(appPrivateFolderRoot, "sessions").absolutePath""")
+# Original Kotlin string includes a closing quote after /openvins/.
+# Remove that quote (not part of the replacement's Python triple delimiter).
+p=root/main
+fixed=p.read_text().replace(
+    'File(appPrivateFolderRoot, "sessions").absolutePath"',
+    'File(appPrivateFolderRoot, "sessions").absolutePath')
+p.write_text(fixed)
 replace(main,
     """        File(privateConfigDir).mkdirs()
         
