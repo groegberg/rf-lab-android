@@ -1,0 +1,54 @@
+name: Publish RF Lab Guided Scan v0.5.0 APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v0.5.0.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Enable SDK tools
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -x "$SDKMANAGER"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+      - name: Install Android SDK
+        run: sdkmanager --install "platforms;android-36" "build-tools;35.0.0" "platform-tools"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Test radio localization and chirp signal processing
+        run: gradle --no-daemon --stacktrace :app:testDebugUnitTest
+      - name: Test Alexa offline payloads
+        run: node integrations/alexa/messageFactory.test.mjs
+      - name: Build APK
+        run: |
+          gradle --no-daemon --stacktrace :app:assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk RF-Lab-Guided-Scan-v0.5.0.apk
+          sha256sum RF-Lab-Guided-Scan-v0.5.0.apk
+      - name: Publish GitHub release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v0.5.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v0.5.0 already exists; preserving existing asset"
+            exit 0
+          fi
+          gh release create v0.5.0 RF-Lab-Guided-Scan-v0.5.0.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RF Lab v0.5.0 — Guided Optical 3D Scan" \
+            --notes "Root-free Pixel/Android app with guided five-step onboarding: ARCore camera + live color-coded optical 3D depth cloud, tap-to-mark rooms, WiFi RF calibration, room-linked magnetometer and acoustic chirp experiments, mapped APs/lamps/plugs, simulation-only automations and comprehensive backups. No live Alexa control. Before uninstalling older debug APK, export local data. See docs/GUIDED_SCAN_V050.md."
