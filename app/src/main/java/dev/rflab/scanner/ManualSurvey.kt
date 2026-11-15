@@ -44,7 +44,8 @@ class ManualSurvey(private val context: Context) {
     }
 
     @Synchronized fun setSize(width: Float, height: Float): Boolean {
-        if (!width.isFinite() || !height.isFinite() || width !in 1f..100f || height !in 1f..100f) return false
+        if (!width.isFinite() || !height.isFinite() || width !in 1f..100f || height !in 1f..100f ||
+            points.any { it.x > width || it.z > height }) return false
         widthM = width; heightM = height; persist()
         return true
     }
