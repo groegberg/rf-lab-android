@@ -39,7 +39,8 @@ data class HomeAnchor(
 }
 data class HomeDevice(
     val id: String, var name: String, var roomId: String,
-    var x: Float, var z: Float, var type: String, var actionName: String = ""
+    var x: Float, var z: Float, var type: String, var actionName: String = "",
+    var bssid: String = ""
 )
 data class HomeRule(
     val id: String, val roomId: String, var action: String,
@@ -239,7 +240,8 @@ class SpatialHomeStore(private val context: Context) {
         devices.forEach { d -> dd.put(JSONObject()
             .put("id", d.id).put("name", d.name).put("room_id", d.roomId)
             .put("x", d.x.toDouble()).put("z", d.z.toDouble())
-            .put("type", d.type).put("action", d.actionName)) }
+            .put("type", d.type).put("action", d.actionName)
+            .put("bssid", d.bssid)) }
         root.put("devices", dd)
         val rr = JSONArray()
         rules.forEach { r -> rr.put(JSONObject()
@@ -292,7 +294,7 @@ class SpatialHomeStore(private val context: Context) {
                 devices.add(HomeDevice(j.getString("id"), j.getString("name"),
                     j.getString("room_id"), j.getDouble("x").toFloat(),
                     j.getDouble("z").toFloat(), j.optString("type"),
-                    j.optString("action")))
+                    j.optString("action"), j.optString("bssid")))
             }
             val ruleList = root.optJSONArray("rules") ?: JSONArray()
             for (i in 0 until ruleList.length()) {
