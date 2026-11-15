@@ -108,6 +108,7 @@ class SpatialHomeActivity : Activity() {
         wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         automation = SpatialAutomation(home)
         selectedRoomId = home.rooms.firstOrNull()?.id
+        tab = intent.getIntExtra("open_tab", 0).coerceIn(0, 5)
         layout()
         render()
     }
@@ -272,6 +273,12 @@ class SpatialHomeActivity : Activity() {
     private fun homePage() {
         val est = lastEstimate
         val age = if (lastFreshMs > 0) (System.currentTimeMillis() - lastFreshMs) / 1000L else -1L
+        val quick = card("EINFACH EINRICHTEN",
+            "3D-Scan → Räume → RF/Magnet/Akustik → Geräte → Automationen")
+        add(quick, action("Geführte Einrichtung öffnen", true) {
+            startActivity(Intent(this, SpatialSetupActivity::class.java))
+        }, 8)
+        add(content, quick, bottom = 12)
         val summary = card("DEIN STANDORT", if (est?.usable(System.currentTimeMillis()) == true)
             "WLAN-Fingerprint stimmt mit einer bekannten Raumposition überein."
             else "Noch keine sichere Raumzuordnung. Unbekannte Positionen lösen keine Aktion aus.")
@@ -387,7 +394,7 @@ class SpatialHomeActivity : Activity() {
                 }
             ), 8)
             home.devices.filter { it.roomId == r.id }.forEach { device ->
-                add(item, text((if (device.type == "Lampe") "LICHT" else "STECKDOSE") +
+                add(item, text(device.type.uppercase(Locale.GERMAN) +
                     "  ·  " + device.name, 12.6f, white, true), 12)
                 add(item, actions(
                     action("Auf Karte setzen") {
@@ -446,7 +453,7 @@ class SpatialHomeActivity : Activity() {
         val room = currentRoom()
         if (room == null) { toast("Zuerst einen Raum anlegen."); return }
         AlertDialog.Builder(this).setTitle("Gerätetyp")
-            .setItems(arrayOf("Lampe", "Steckdose")) { _, which ->
+            .setItems(arrayOf("Lampe", "Steckdose", "Access Point / Router")) { _, which ->
                 val name = EditText(this).apply {
                     hint = "z. B. Stehlampe Sofa"
                     setSingleLine(true)
@@ -456,7 +463,11 @@ class SpatialHomeActivity : Activity() {
                         "Anschließend kannst du seine echte Position antippen.")
                     .setView(name).setNegativeButton("Abbrechen", null)
                     .setPositiveButton("Anlegen") { _, _ ->
-                        val type = if (which == 0) "Lampe" else "Steckdose"
+                        val type = when (which) {
+                            0 -> "Lampe"
+                            1 -> "Steckdose"
+                            else -> "Access Point"
+                        }
                         val d = home.addDevice(name.text.toString(), room.id, type)
                         if (d == null) toast("Bitte Gerätenamen eingeben.")
                         else {
@@ -689,14 +700,17 @@ class SpatialHomeActivity : Activity() {
         }, 12)
         add(content, box, bottom = 12)
         val future = card("PHYSICS LAB",
-            "Experimentelle Magnetfeldmessung ist bereits verfügbar. " +
-                "Akustische Echoanalyse, adaptive Messplanung und Sensorfusion folgen.")
+            "Magnetfeld und aktive Akustikmessung sind als Experimente verfügbar. " +
+                "Adaptive Messplanung und Sensorfusion folgen.")
         add(future, action("Magnetic Lab · Live-3D-Magnetometer", true) {
             startActivity(Intent(this, MagneticLabActivity::class.java))
         }, 9)
-        add(future, text("Die Messung liefert echte X/Y/Z-Magnetfeldwerte samt CSV, " +
-            "noch keine automatisch verortete Magnetfeldkarte. " +
-            "Aktives Sonar und KI-Depth werden nicht als fertig angezeigt.", 12.3f, quiet), 9)
+        add(future, action("Acoustic Lab · Echo-Chirp", false) {
+            startActivity(Intent(this, AcousticLabActivity::class.java))
+        }, 8)
+        add(future, text("Magnetik liefert echte X/Y/Z-Werte; Akustik liefert ein " +
+            "qualitatives Echo-Profil. Eine metrisch kalibrierte 3D-Rekonstruktion " +
+            "dieser beiden Sensoren ist noch nicht enthalten.", 12.3f, quiet), 9)
         add(content, future)
     }
 
