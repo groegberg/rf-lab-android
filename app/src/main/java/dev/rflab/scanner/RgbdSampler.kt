@@ -15,7 +15,8 @@ import kotlin.math.sqrt
 internal class RgbdSampler {
     data class Result(val points: List<SurveyDepth>, val rawCount: Int,
                       val fullCount: Int, val coloredCount: Int,
-                      val rawTimestamp: Long, val fullTimestamp: Long)
+                      val rawTimestamp: Long, val fullTimestamp: Long,
+                      val keyframe: RgbdKeyframeData? = null)
 
     private data class Sample(
         val x: Float, val y: Float, val z: Float, val confidence: Float,
@@ -29,7 +30,7 @@ internal class RgbdSampler {
         lastFullTimestamp = Long.MIN_VALUE
     }
 
-    fun capture(frame: Frame, camera: Camera): Result? {
+    fun capture(frame: Frame, camera: Camera, saveKeyframe: Boolean = false): Result? {
         val raw = acquire { frame.acquireRawDepthImage16Bits() }
         val conf = if (raw != null) acquire { frame.acquireRawDepthConfidenceImage() } else null
         val full = acquire { frame.acquireDepthImage16Bits() }
@@ -51,17 +52,42 @@ internal class RgbdSampler {
                 dims, focal, center, matrix, samples) else 0
             if (useRaw) lastRawTimestamp = raw!!.timestamp
             if (useFull) lastFullTimestamp = full!!.timestamp
+            var keyframe: RgbdKeyframeData? = null
             if (samples.isNotEmpty()) {
-                // ARCore may temporarily have depth without a CPU YUV camera image.
-                acquire { frame.acquireCameraImage() }?.use { cameraImage ->
-                    colorize(frame, cameraImage, samples)
+                // Acquire and release on ARCore GL thread: never hand an Image
+                // to the asynchronous writer, copy only immutable bytes.
+                acquire { frame.acquireCameraImage() }?.use { cpu ->
+                    colorize(frame, cpu, samples)
+                    if (saveKeyframe && cpu.width % 2 == 0 && cpu.height % 2 == 0) {
+                        val imageNv21 = copyNv21(cpu)
+                        val depthImage = full ?: raw
+                        if (imageNv21 != null && depthImage != null) {
+                            val w = depthImage.width
+                            val h = depthImage.height
+                            val dFx = focal[0] * w / dims[0]
+                            val dFy = focal[1] * h / dims[1]
+                            val dCx = center[0] * w / dims[0]
+                            val dCy = center[1] * h / dims[1]
+                            val imageUvCorners = textureToImageCorners(frame)
+                            val pose = FloatArray(16)
+                            camera.pose.toMatrix(pose, 0)
+                            keyframe = RgbdKeyframeData(
+                                frame.timestamp, pose, w, h, dFx, dFy, dCx, dCy,
+                                imageUvCorners, cpu.width, cpu.height, imageNv21,
+                                packDepth(depthImage),
+                                if (raw != null && raw.width == w && raw.height == h)
+                                    packDepth(raw) else ByteArray(w * h * 2),
+                                if (conf != null && conf.width == w && conf.height == h)
+                                    packConfidence(conf) else ByteArray(w * h))
+                        }
+                    }
                 }
             }
             return Result(samples.map {
                 SurveyDepth(it.x, it.y, it.z, it.confidence,
                     argb = it.argb, rawDepth = it.raw)
             }, rawCount, fullCount, samples.count { it.argb != 0 },
-                raw?.timestamp ?: -1, full?.timestamp ?: -1)
+                raw?.timestamp ?: -1L, full?.timestamp ?: -1L, keyframe)
         } finally {
             raw?.close()
             conf?.close()
@@ -136,6 +162,74 @@ internal class RgbdSampler {
             if (x in 0 until cpu.width && y in 0 until cpu.height)
                 point.argb = yuvPixel(cpu, x, y)
         }
+    }
+
+    private fun textureToImageCorners(frame: Frame): FloatArray {
+        val input = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        val output = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+        for (v in floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)) input.put(v)
+        input.rewind()
+        frame.transformCoordinates2d(
+            Coordinates2d.TEXTURE_NORMALIZED, input,
+            Coordinates2d.IMAGE_NORMALIZED, output)
+        output.rewind()
+        return FloatArray(8) { output.get() }
+    }
+
+    private fun packDepth(image: Image): ByteArray {
+        val w = image.width
+        val h = image.height
+        val plane = image.planes[0]
+        val buffer = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        val dst = ByteArray(w * h * 2)
+        for (y in 0 until h) for (x in 0 until w) {
+            val src = y * plane.rowStride + x * plane.pixelStride
+            if (src < 0 || src + 1 >= buffer.limit()) continue
+            val mm = buffer.getShort(src).toInt() and 0xffff
+            val i = (y * w + x) * 2
+            dst[i] = (mm and 255).toByte()
+            dst[i + 1] = (mm ushr 8).toByte()
+        }
+        return dst
+    }
+
+    private fun packConfidence(image: Image): ByteArray {
+        val plane = image.planes[0]
+        val buffer = plane.buffer.duplicate()
+        val dst = ByteArray(image.width * image.height)
+        for (y in 0 until image.height) for (x in 0 until image.width) {
+            val src = y * plane.rowStride + x * plane.pixelStride
+            if (src >= 0 && src < buffer.limit())
+                dst[y * image.width + x] = buffer.get(src)
+        }
+        return dst
+    }
+
+    /** Respect YUV_420_888 plane row/pixel strides, output a packed NV21 copy. */
+    private fun copyNv21(image: Image): ByteArray? {
+        val w = image.width
+        val h = image.height
+        if (w <= 0 || h <= 0 || w % 2 != 0 || h % 2 != 0 ||
+            image.planes.size < 3) return null
+        val result = ByteArray(w * h * 3 / 2)
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+        fun pixel(plane: Image.Plane, x: Int, y: Int): Byte {
+            val i = y * plane.rowStride + x * plane.pixelStride
+            return if (i >= 0 && i < plane.buffer.limit()) plane.buffer.get(i)
+                else 0.toByte()
+        }
+        for (y in 0 until h) for (x in 0 until w)
+            result[y * w + x] = pixel(yPlane, x, y)
+        var i = w * h
+        for (y in 0 until h / 2) for (x in 0 until w / 2) {
+            result[i++] = pixel(vPlane, x, y)
+            result[i++] = pixel(uPlane, x, y)
+        }
+        return result
     }
 
     private fun yuvPixel(image: Image, x: Int, y: Int): Int {
