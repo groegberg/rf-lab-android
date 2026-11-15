@@ -38,7 +38,8 @@ class ArPoseTracker(
     private val store: SessionStore,
     private val report: (String) -> Unit,
     private val poseObserver: ((JSONObject, Long) -> Unit)? = null,
-    private val depthObserver: ((List<SurveyDepth>, Long) -> Unit)? = null
+    private val depthObserver: ((List<SurveyDepth>, Long) -> Unit)? = null,
+    private val keyframeObserver: ((RgbdKeyframeData) -> Boolean)? = null
 ) : GLSurfaceView(context), GLSurfaceView.Renderer {
 
     @Volatile private var session: Session? = null
@@ -56,6 +57,8 @@ class ArPoseTracker(
     private var lastDepthNs = 0L
     private var depthAvailable = false
     private val rgbdSampler = RgbdSampler()
+    private var lastKeyframeNs = 0L
+    private var lastKeyframePose: com.google.ar.core.Pose? = null
     @Volatile internal var latestRgbdStats: RgbdSampler.Result? = null
         private set
     private var sweepRequested = false
@@ -130,6 +133,8 @@ class ArPoseTracker(
             lastPoseNs = 0L
             lastDepthNs = 0L
             rgbdSampler.reset()
+            lastKeyframeNs = 0L
+            lastKeyframePose = null
             latestRgbdStats = null
             lastFrameTimestamp = 0L
             lastTracking = ""
@@ -376,7 +381,34 @@ class ArPoseTracker(
     /** New raw depth plus lower-priority interpolated depth, coloured by CPU YUV. */
     private fun captureDepth(frame: com.google.ar.core.Frame, timeNs: Long) {
         try {
-            val result = rgbdSampler.capture(frame, frame.camera) ?: return
+            val cameraPose = frame.camera.pose
+            val previous = lastKeyframePose
+            val moved = if (previous == null) true else {
+                val dx = cameraPose.tx() - previous.tx()
+                val dy = cameraPose.ty() - previous.ty()
+                val dz = cameraPose.tz() - previous.tz()
+                dx * dx + dy * dy + dz * dz >= .18f * .18f
+            }
+            val turned = if (previous == null) true else {
+                val dot = kotlin.math.abs(
+                    cameraPose.qx() * previous.qx() +
+                    cameraPose.qy() * previous.qy() +
+                    cameraPose.qz() * previous.qz() +
+                    cameraPose.qw() * previous.qw())
+                dot < .985f
+            }
+            val elapsed = timeNs - lastKeyframeNs
+            val wantKeyframe = keyframeObserver != null &&
+                (lastKeyframeNs == 0L ||
+                    (elapsed >= 1_600_000_000L &&
+                     (moved || turned || elapsed >= 6_000_000_000L)))
+            val result = rgbdSampler.capture(frame, frame.camera, wantKeyframe) ?: return
+            result.keyframe?.let { candidate ->
+                if (keyframeObserver?.invoke(candidate) == true) {
+                    lastKeyframeNs = timeNs
+                    lastKeyframePose = cameraPose
+                }
+            }
             latestRgbdStats = result
             if (result.points.isEmpty()) return
             val arr = JSONArray()
