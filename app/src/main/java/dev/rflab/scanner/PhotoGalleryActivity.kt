@@ -70,6 +70,11 @@ class PhotoGalleryActivity: Activity() {
             setPadding(dp(5),dp(9),0,dp(10))
         }
         root.addView(summary)
+        root.addView(button("Offline: Optische Posen + Depth Anything 3"){
+            startActivity(Intent(this,OfflineReconstructionActivity::class.java).apply{
+                putExtra("photo_session",session.name)
+            })
+        },LinearLayout.LayoutParams(-1,dp(52)))
         val scroll=ScrollView(this).apply{isFillViewport=true}
         grid=GridLayout(this).apply{
             columnCount=3
