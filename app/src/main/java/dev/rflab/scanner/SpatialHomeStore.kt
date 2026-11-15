@@ -160,6 +160,46 @@ class SpatialHomeStore(private val context: Context) {
 
     fun exportJson(): String = serialize().toString(2)
 
+
+    /**
+     * Transactional user-selected JSON restore. Keep a backup of the previous
+     * map and roll it back if malformed content fails parse validation.
+     */
+    @Synchronized fun restoreJson(content: String): Boolean {
+        if (content.length > 6_000_000) return false
+        val incoming = try { JSONObject(content) } catch (_: Exception) { return false }
+        if (incoming.optString("schema") != "rflab-spatial-home-v1") return false
+        val rs = incoming.optJSONArray("rooms") ?: return false
+        val aa = incoming.optJSONArray("anchors") ?: return false
+        val dd = incoming.optJSONArray("devices") ?: return false
+        val rr = incoming.optJSONArray("rules") ?: return false
+        if (rs.length() > 200 || aa.length() > 4000 ||
+            dd.length() > 1000 || rr.length() > 200) return false
+        val original = if (target.exists()) target.readText(Charsets.UTF_8) else null
+        return try {
+            val tmp = File(target.parentFile, target.name + ".restore.tmp")
+            tmp.writeText(content, Charsets.UTF_8)
+            if (!tmp.renameTo(target)) {
+                target.writeText(content, Charsets.UTF_8)
+                tmp.delete()
+            }
+            rooms.clear(); anchors.clear(); devices.clear(); rules.clear(); events.clear()
+            load()
+            if (rooms.size != rs.length() || anchors.size != aa.length() ||
+                devices.size != dd.length() || rules.size != rr.length()) {
+                error("Imported content is inconsistent")
+            }
+            save()
+            true
+        } catch (_: Exception) {
+            if (original == null) target.delete()
+            else target.writeText(original, Charsets.UTF_8)
+            rooms.clear(); anchors.clear(); devices.clear(); rules.clear(); events.clear()
+            if (original != null) load()
+            false
+        }
+    }
+
     @Synchronized fun save() {
         val tmp = File(target.parentFile, target.name + ".tmp")
         tmp.writeText(serialize().toString(), Charsets.UTF_8)
