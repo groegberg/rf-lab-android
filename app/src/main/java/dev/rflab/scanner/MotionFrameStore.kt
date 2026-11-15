@@ -13,6 +13,8 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
+import java.util.zip.Deflater
 import java.util.zip.DeflaterOutputStream
 import java.util.zip.InflaterInputStream
 
@@ -28,7 +30,7 @@ internal class MotionFrameStore(private val session: File) : AutoCloseable {
     private val file = File(session, "motion_" + SystemClock.elapsedRealtimeNanos() + ".rfvo")
     private val writer = DataOutputStream(BufferedOutputStream(file.outputStream(), 128*1024))
     private val executor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
-        ArrayBlockingQueue<Runnable>(5), ThreadPoolExecutor.DiscardPolicy())
+        ArrayBlockingQueue<Runnable>(5), ThreadPoolExecutor.AbortPolicy())
     @Volatile private var closed = false
     @Volatile var frames = 0
         private set
@@ -43,23 +45,27 @@ internal class MotionFrameStore(private val session: File) : AutoCloseable {
             frames >= 3600 || bytes >= 200L*1024*1024) return
         if (executor.queue.remainingCapacity() == 0) { dropped++; return }
         val copy = gray.copyOf()
-        executor.execute {
-            if (closed) return@execute
-            try {
-                val packed = ByteArrayOutputStream(copy.size/2)
-                DeflaterOutputStream(packed).use { it.write(copy) }
-                val data = packed.toByteArray()
-                synchronized(writer) {
-                    writer.writeLong(timestampNs)
-                    writer.writeInt(width);writer.writeInt(height)
-                    writer.writeInt(data.size)
-                    writer.write(data)
-                }
-                bytes += data.size + 20L
-                frames++
-                if(frames % 15 == 0) synchronized(writer){writer.flush()}
-            } catch (_: Exception) { dropped++ }
-        }
+        try {
+            executor.execute {
+                try {
+                    val packed = ByteArrayOutputStream(copy.size/2)
+                    val deflater=Deflater(Deflater.BEST_SPEED)
+                    try {
+                        DeflaterOutputStream(packed,deflater).use { it.write(copy) }
+                    } finally { deflater.end() }
+                    val data = packed.toByteArray()
+                    synchronized(writer) {
+                        writer.writeLong(timestampNs)
+                        writer.writeInt(width);writer.writeInt(height)
+                        writer.writeInt(data.size)
+                        writer.write(data)
+                        bytes += data.size + 20L
+                        frames++
+                        if(frames % 15 == 0) writer.flush()
+                    }
+                } catch (_: Exception) { dropped++ }
+            }
+        } catch (_: RejectedExecutionException) { dropped++ }
     }
 
     override fun close() {
@@ -102,8 +108,9 @@ internal class MotionFrameStore(private val session: File) : AutoCloseable {
                             input.readFully(compressed)
                             val idx=counter++
                             if (idx%step.coerceAtLeast(1)!=0) continue
+                            // Bound decompression to the expected image size.
                             val inflated=InflaterInputStream(compressed.inputStream())
-                                .use { it.readBytes() }
+                                .use { it.readNBytes(w*h+1) }
                             if (inflated.size==w*h)
                                 result.add(Frame(timestamp,w,h,inflated))
                         } catch (_: EOFException) { break }
