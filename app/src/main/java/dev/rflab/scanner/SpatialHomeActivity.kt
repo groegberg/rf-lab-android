@@ -126,6 +126,12 @@ class SpatialHomeActivity : Activity() {
     }
 
     override fun onPause() {
+        // Never attribute measurements collected after returning from another
+        // app to the last position: the phone may have moved while paused.
+        if (collecting) {
+            collecting = false
+            notice = "Messpunktaufnahme nach App-Wechsel automatisch pausiert."
+        }
         handler.removeCallbacks(scanTask)
         handler.removeCallbacks(progressTask)
         if (registered) {
