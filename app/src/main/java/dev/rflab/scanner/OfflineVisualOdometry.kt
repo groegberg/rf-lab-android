@@ -42,13 +42,15 @@ internal class OfflineVisualOdometry {
         }
     }
     data class Result(val poses:List<Pose>,val inliers:Int,val rejected:Int,
-                      val gyroPairs:Int,val calibration:Intrinsics,
+                      val gyroPairs:Int,val gyroFusedPairs:Int,
+                      val calibration:Intrinsics,
                       val loopCandidates:Int,val warnings:List<String>){
         fun json():JSONObject{
             val o=JSONObject()
                 .put("schema","rflab-offline-visual-odometry-v1")
                 .put("source","Camera2 grayscale + OpenCV ORB/RANSAC")
                 .put("gyro_angular_check_pairs",gyroPairs)
+                .put("gyro_rotation_prior_applied_pairs",gyroFusedPairs)
                 .put("valid_motion_pairs",inliers)
                 .put("rejected_motion_pairs",rejected)
                 .put("loop_candidates_unoptimized",loopCandidates)
@@ -132,12 +134,24 @@ internal class OfflineVisualOdometry {
         }.getOrDefault(false)
         val gyro=if(comparable)GyroAngleStream.fromSession(dir)
             else GyroAngleStream.empty()
+        val metadata=runCatching {
+            JSONObject(File(dir,"camera.json").readText())
+        }.getOrNull()
+        val poseReference=metadata?.optInt("lens_pose_reference",-1)?:-1
+        val quaternion=metadata?.optJSONArray(
+            "lens_pose_sensor_to_camera_quaternion_xyzw")
+        val calibratedLens=if(poseReference>=0 &&
+            poseReference!=
+                android.hardware.camera2.CameraMetadata.LENS_POSE_REFERENCE_UNDEFINED &&
+            quaternion!=null&&quaternion.length()==4)
+            DoubleArray(4){quaternion.optDouble(it)} else null
         var R=id()
         var t=doubleArrayOf(0.0,0.0,0.0)
         var prev:MotionFrameStore.Frame?=null
         var prevKp:MatOfKeyPoint?=null
         var prevDesc:Mat?=null
         var accepted=0;var rejected=0;var gyroPairs=0
+        var gyroFusedPairs=0
         var loops=0
         val keyDescriptors=ArrayList<Mat>()
         val poses=ArrayList<Pose>(frames.size)
@@ -186,8 +200,27 @@ internal class OfflineVisualOdometry {
                             try{
                                 good=Calib3d.recoverPose(E,p1,p2,k,
                                     relR,relT,mask)
-                                val rot=toArray(relR)
-                                observedAngle=angle(rot)
+                                val visualR=toArray(relR)
+                                observedAngle=angle(visualR)
+                                val gyroR=if(calibratedLens!=null)
+                                    gyro.cameraRotationBetween(
+                                        previous.timestampNs,frame.timestampNs,
+                                        calibratedLens) else null
+                                // Apply calibrated IMU rotation only when visual
+                                // essential RANSAC agrees within 9 degrees.
+                                // If they disagree, trust the optical estimate
+                                // and retain the disagreement for diagnostics.
+                                val consistency=gyroR?.let { g ->
+                                    val delta=DoubleArray(9)
+                                    for(row in 0..2)for(col in 0..2)
+                                        for(k2 in 0..2)
+                                            delta[row*3+col]+=
+                                                visualR[row*3+k2]*g[col*3+k2]
+                                    angle(delta)
+                                }
+                                val useGyro=gyroR!=null &&
+                                    consistency!=null && consistency<.16
+                                val rot=if(useGyro)gyroR!! else visualR
                                 val displacements=p.indices.map {
                                     hypot(p[it].x-q[it].x,p[it].y-q[it].y)
                                 }.sorted()
@@ -195,6 +228,7 @@ internal class OfflineVisualOdometry {
                                 if(good>=15&&good.toDouble()/count>=.38 &&
                                     median in 1.5..110.0){
                                     R=product(rot,R)
+                                    if(useGyro)gyroFusedPairs++
                                     val shifted=rotate(rot,t)
                                     t=DoubleArray(3){i->
                                         shifted[i]+relT.get(i,0)[0]
@@ -240,11 +274,11 @@ internal class OfflineVisualOdometry {
         }
         val warnings=listOf(
             "OpenCV 5-point optical odometry. Translation unit steps are not metres.",
-            "Gyro measurements check rotation magnitude only. Camera-IMU extrinsics/bias not calibrated.",
+            "A calibrated lens quaternion permits gyro rotation priors only when visually consistent. IMU bias/extrinsic timing must still be validated on Pixel.",
             "No IMU preintegration, loop closure optimization or bundle adjustment yet.",
             "Pose drift and unknown depth scale prohibit accurate room reconstruction."
         )
         return Result(poses,accepted,rejected,gyroPairs,
-            calibration,loops,warnings)
+            gyroFusedPairs,calibration,loops,warnings)
     }
 }
