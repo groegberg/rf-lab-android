@@ -130,13 +130,8 @@ replace(cam,
 replace(cam,"mPreviewRequestBuilder!!.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, -2)",
             "mPreviewRequestBuilder!!.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 0)")
 replace(cam,
-    """        calcPreviewSize(width, height)
-
-        val w = mPreviewSize.width""",
-    """        calcPreviewSize(width, height)
-        writeApproximateCameraIntrinsics()
-
-        val w = mPreviewSize.width""")
+    "        calcPreviewSize(width, height)",
+    "        calcPreviewSize(width, height)\n        writeApproximateCameraIntrinsics()")
 calib_method=r'''
     /** Camera2-based intrinsics are approximate; extrinsics stay uncalibrated. */
     private fun writeApproximateCameraIntrinsics() {
