@@ -45,6 +45,7 @@ class RgbdSurfaceViewerActivity : Activity() {
             setBackgroundColor(Color.rgb(9, 17, 29))
         }
         setContentView(layout)
+        SystemBarsSafeArea.install(this, layout)
         surface = RgbdSurfaceView(this)
         layout.addView(surface, FrameLayout.LayoutParams(-1, -1))
         fun pill(color: Int) = GradientDrawable().apply {
