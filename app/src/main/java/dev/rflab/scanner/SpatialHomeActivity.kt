@@ -77,6 +77,7 @@ class SpatialHomeActivity : Activity() {
     private val permissionRequest = 218
     private val homeExportRequest = 219
     private val homeImportRequest = 220
+    private val csvImportRequest = 221
     private val progressTask = object : Runnable {
         override fun run() {
             refreshHeader()
@@ -527,6 +528,12 @@ class SpatialHomeActivity : Activity() {
             " unbekannt. Stichprobe klein, keine Genauigkeitsgarantie."
         add(quality, text(vtext, 11.5f, if (validation.wrong > 0) orange else quiet), 10)
         add(quality, action("Vorhandene Nachtmessung übernehmen") { importManual() }, 10)
+        add(quality, action("Alte Nachtmessungs-CSV importieren") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }, csvImportRequest)
+        }, 8)
         add(content, quality, bottom = 12)
         note("Android limitiert aktive WLAN-Scans. Wir verwenden nur frische AP-Daten " +
             "mit plausiblen Hardwarezeitstempeln. 10–20 Sekunden können für mehrere Scans zu kurz sein: " +
@@ -700,6 +707,36 @@ class SpatialHomeActivity : Activity() {
             }.show()
     }
 
+    private fun importCsv(uri: android.net.Uri) {
+        try {
+            val stream = contentResolver.openInputStream(uri) ?: error("CSV nicht lesbar")
+            val bytes = stream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(16_384)
+                while (true) {
+                    val n = input.read(chunk)
+                    if (n < 0) break
+                    if (out.size() + n > 4_000_000) error("CSV größer als 4 MB")
+                    out.write(chunk, 0, n)
+                }
+                out.toByteArray()
+            }
+            val result = SpatialManualCsvImporter().import(home,
+                String(bytes, Charsets.UTF_8))
+            selectedRoomId = home.rooms.lastOrNull()?.id
+            selectedAnchorId = null
+            collecting = false
+            lastEstimate = null
+            automation.reset()
+            notice = result.points.toString() + " Punkte und " +
+                result.bssidReadings + " BSSID-Mediane importiert."
+            render()
+            toast(notice)
+        } catch (e: Exception) {
+            toast("CSV-Import: " + (e.message ?: e.javaClass.simpleName))
+        }
+    }
+
     private fun importHome(uri: android.net.Uri) {
         try {
             val stream = contentResolver.openInputStream(uri) ?: error("Datei nicht lesbar")
@@ -744,6 +781,10 @@ class SpatialHomeActivity : Activity() {
         if (result != RESULT_OK) return
         if (code == homeImportRequest) {
             data?.data?.let { importHome(it) }
+            return
+        }
+        if (code == csvImportRequest) {
+            data?.data?.let { importCsv(it) }
             return
         }
         if (code != homeExportRequest) return
