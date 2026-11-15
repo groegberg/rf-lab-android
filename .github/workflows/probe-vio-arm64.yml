@@ -1,0 +1,64 @@
+name: Probe real Rust mono-inertial VI-SLAM on Pixel arm64
+on:
+  push:
+    branches: [feature/realtime-vio-engine-v1.2]
+    paths:
+      - 'native/vio-bridge/**'
+      - '.github/workflows/probe-vio-arm64.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Set up Android NDK
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          "$SDKMANAGER" --install 'ndk;27.2.12479018'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Clone reviewed upstream at exact immutable commit
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/rsasaki0109/visloc-rs.git /tmp/visloc
+          git -C /tmp/visloc checkout --detach 956694b6b46fe096e715e0c195151897fe8e255b
+          test "$(git -C /tmp/visloc rev-parse HEAD)" = "956694b6b46fe096e715e0c195151897fe8e255b"
+          grep -q 'MIT OR Apache-2.0' /tmp/visloc/bindings/wasm/Cargo.toml
+          test -f /tmp/visloc/LICENSE-MIT
+          test -f /tmp/visloc/LICENSE-APACHE
+          mkdir -p /tmp/visloc/bindings/android_vio_bridge
+          cp -a native/vio-bridge/. /tmp/visloc/bindings/android_vio_bridge/
+
+      - name: Build native JNI library for Pixel 10 Pro XL
+        shell: bash
+        run: |
+          export NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android31-clang"
+          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android31-clang"
+          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+          cd /tmp/visloc
+          cargo build --manifest-path bindings/android_vio_bridge/Cargo.toml \
+            --target aarch64-linux-android --release -vv
+          SO=bindings/android_vio_bridge/target/aarch64-linux-android/release/librf_lab_vio_bridge.so
+          test -s "$SO"
+          file "$SO"
+          "$NDK_BIN/llvm-readelf" -h "$SO" | grep -E 'AArch64|Machine'
+          cp "$SO" "$GITHUB_WORKSPACE/librf_lab_vio_bridge-arm64.so"
+
+      - name: Upload validated native bridge for separate on-device QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-vio-arm64-native-feasibility
+          path: librf_lab_vio_bridge-arm64.so
+          if-no-files-found: error
