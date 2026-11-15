@@ -10,8 +10,8 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.7.0-dev"
+        versionCode = 15
+        versionName = "0.8.0-dev"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
