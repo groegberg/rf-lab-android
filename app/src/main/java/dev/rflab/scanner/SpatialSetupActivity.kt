@@ -287,14 +287,18 @@ class SpatialSetupActivity : Activity() {
         add(body, wifi, bottom = 11)
         val mag = card("2   MAGNETFELD",
             "Echte X/Y/Z-Werte aufnehmen und als CSV dokumentieren.")
+        add(mag, label("Gespeicherte Raumprofile: " +
+            SpatialSensorsStore(this).magnetic.size, 11.4f, muted), 7)
         add(mag, button("MAGNETFELD MESSEN") {
-            startActivity(Intent(this, MagneticLabActivity::class.java))
+            openSensorForRoom(MagneticLabActivity::class.java)
         }, 9)
         add(body, mag, bottom = 11)
         val audio = card("3   AKUSTIK / ECHO",
             "Aktives Akustikexperiment mit kurzen hörbaren Chirps und Mikrofonaufnahme.")
+        add(audio, label("Gespeicherte Raumprofile: " +
+            SpatialSensorsStore(this).acoustic.size, 11.4f, muted), 7)
         add(audio, button("AKUSTIK EINMESSEN") {
-            startActivity(Intent(this, AcousticLabActivity::class.java))
+            openSensorForRoom(AcousticLabActivity::class.java)
         }, 9)
         add(body, audio, bottom = 11)
         add(body, label("Für die erste Alexa-Simulation reicht die WLAN-Kalibrierung. " +
@@ -332,6 +336,19 @@ class SpatialSetupActivity : Activity() {
         add(c, button("REGELN EINRICHTEN", true) { openHome(3) }, 11)
         add(body, c, bottom = 11)
         add(body, button("Zum Spatial-Home-Dashboard") { openHome(0) })
+    }
+
+    private fun openSensorForRoom(activity: Class<out Activity>) {
+        if (home.rooms.isEmpty()) {
+            toast("Bitte zuerst mindestens einen Raum im Scan definieren.")
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Welchen Raum einmessen?")
+            .setItems(home.rooms.map { it.name }.toTypedArray()) { _, index ->
+                startActivity(Intent(this, activity).apply {
+                    putExtra("room_id", home.rooms[index].id)
+                })
+            }.show()
     }
 
     private fun openHome(tab: Int) {
