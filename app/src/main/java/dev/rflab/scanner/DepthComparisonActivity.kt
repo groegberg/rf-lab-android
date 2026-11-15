@@ -73,6 +73,7 @@ class DepthComparisonActivity : Activity() {
             setBackgroundColor(bg)
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         val title = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
