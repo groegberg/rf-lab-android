@@ -18,6 +18,8 @@ android {
         targetSdk = 35
         versionCode = 19
         versionName = "1.1.0-dev"
+        // Pixel 10 Pro XL: bundle only 64-bit ARM native OpenCV/LiteRT.
+        ndk { abiFilters += "arm64-v8a" }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
