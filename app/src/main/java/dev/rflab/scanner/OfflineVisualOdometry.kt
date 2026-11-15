@@ -82,20 +82,16 @@ internal class OfflineVisualOdometry {
         fun intrinsics(dir:File,w:Int,h:Int):Intrinsics{
             val data=runCatching{JSONObject(File(dir,"camera.json").readText())}
                 .getOrNull()
-            val active=data?.optJSONArray("active_array")
+            val active=data?.optJSONArray("pre_correction_active_array")
+                ?:data?.optJSONArray("active_array")
             val lens=data?.optJSONArray("lens_intrinsics_active_array_px")
             if(active!=null && lens!=null && lens.length()>=4 &&
                 active.length()>=4){
-                val aw=active.optDouble(2)-active.optDouble(0)
-                val ah=active.optDouble(3)-active.optDouble(1)
-                if(aw>0 && ah>0 && lens.optDouble(0)>0 &&
-                    lens.optDouble(1)>0){
-                    val sx=w/aw;val sy=h/ah
-                    return Intrinsics(lens.optDouble(0)*sx,
-                        lens.optDouble(1)*sy,
-                        (lens.optDouble(2)-active.optDouble(0))*sx,
-                        (lens.optDouble(3)-active.optDouble(1))*sy,
-                        true) // Camera2 YUV stream crop still needs verification.
+                val k=CameraIntrinsicsCrop.approximate(
+                    DoubleArray(4){lens.optDouble(it)},
+                    DoubleArray(4){active.optDouble(it)},w,h)
+                if(k!=null){
+                    return Intrinsics(k.fx,k.fy,k.cx,k.cy,true)
                 }
             }
             return Intrinsics(w*.85,h*1.13,w/2.0,h/2.0,true)
