@@ -1,3 +1,23 @@
+# RF Lab v1.2.0-dev — VIO camera/IMU stream + independent OpenVINS benchmark
+
+**Update:** Camera2 now targets 640x480 at 30 FPS and records exact frame
+and rolling-shutter timing, while a dedicated sensor thread requests
+gyroscope/accelerometer rates up to 200 Hz. The camera HUD displays
+measured FPS, IMU Hz, capture gaps and recording drops. Original photos
+and offline Depth Anything 3 Small remain unchanged and fully local.
+
+**Separate VIO experiment:** A REAL OpenVINS Mobile Android MSCKF VIO test
+APK is independently built from the upstream GPLv3 project. It runs
+independently from RF Lab and is not mixed with this app's source.
+Its original calibration examples are **not calibrated to the Pixel 10 Pro XL**;
+the test cannot yet establish measured metric accuracy. Full native
+VIO, reliable loop closure and globally fused DA3 geometry are NOT
+implemented in RF Lab itself.
+
+[Research architecture and test procedure](docs/REALTIME_VIO_EXPERIMENT_V120.md)
+
+---
+
 # RF Lab v1.1.0-dev — Offline optical/gyro odometry + Depth Anything 3
 
 **New on-device post-processing:** a 10 Hz Camera2 tracking stream is
