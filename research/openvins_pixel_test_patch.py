@@ -182,18 +182,77 @@ calib_method=r'''
             val config=java.io.File(root,"config/kalibr_imucam_chain.yaml")
             if(!config.exists())return
             val old=config.readText()
-            val replacement=old
+            var replacement=old
                 .replace(Regex("(?m)^  intrinsics:.*$"),
                     "  intrinsics: ["+fx+", "+fy+", "+cx+", "+cy+"]")
                 .replace(Regex("(?m)^  resolution:.*$"),
                     "  resolution: ["+mPreviewSize.width+", "+
                         mPreviewSize.height+"]")
+                .replace(Regex("(?m)^  timeshift_cam_imu:.*$"),
+                    "  timeshift_cam_imu: 0.0")
+            // Never use camera radial distortion from a DIFFERENT phone.
+            val d=info.get(CameraCharacteristics.LENS_DISTORTION)
+            val radial=if(d!=null && d.size>=5)
+                listOf(d[0],d[1],d[3],d[4])
+            else listOf(0f,0f,0f,0f)
+            replacement=replacement.replace(
+                Regex("(?m)^  distortion_coeffs:.*$"),
+                "  distortion_coeffs: ["+radial.joinToString(", ")+"]")
+            var calibrationSource="unknown camera/IMU extrinsic"
+            val reference=info.get(CameraCharacteristics.LENS_POSE_REFERENCE)
+            val quaternion=info.get(CameraCharacteristics.LENS_POSE_ROTATION)
+            val cameraCenter=info.get(CameraCharacteristics.LENS_POSE_TRANSLATION)
+            if(quaternion!=null && quaternion.size>=4 &&
+                reference!=null && reference!=
+                    CameraCharacteristics.LENS_POSE_REFERENCE_UNDEFINED) {
+                // Android defines the quaternion as a rotation from device
+                // sensor axes to camera optical axes. Set this as VIO seed.
+                val norm=kotlin.math.sqrt(quaternion.map{
+                    it.toDouble()*it.toDouble()}.sum())
+                if(norm>.95 && norm<1.05) {
+                    val x=quaternion[0]/norm;val y=quaternion[1]/norm
+                    val z=quaternion[2]/norm;val w=quaternion[3]/norm
+                    val R=doubleArrayOf(
+                        1-2*(y*y+z*z),2*(x*y-z*w),2*(x*z+y*w),
+                        2*(x*y+z*w),1-2*(x*x+z*z),2*(y*z-x*w),
+                        2*(x*z-y*w),2*(y*z+x*w),1-2*(x*x+y*y))
+                    // Only GYROSCOPE pose origin gives camera centre in
+                    // IMU coordinates. Otherwise translation remains a
+                    // zero *initial estimate*, not a measured baseline.
+                    val p=if(reference==
+                        CameraCharacteristics.LENS_POSE_REFERENCE_GYROSCOPE &&
+                        cameraCenter!=null && cameraCenter.size>=3)
+                        DoubleArray(3){cameraCenter[it].toDouble()}
+                    else doubleArrayOf(0.0,0.0,0.0)
+                    val t=DoubleArray(3){i->
+                        -(R[i*3]*p[0]+R[i*3+1]*p[1]+R[i*3+2]*p[2])
+                    }
+                    val lines=replacement.lines().toMutableList()
+                    val matrixStart=lines.indexOfFirst{
+                        it.trim()=="T_cam_imu:"}
+                    if(matrixStart>=0 && matrixStart+4<lines.size){
+                        for(row in 0..2){
+                            lines[matrixStart+row+1]="    - ["+
+                                R[row*3]+", "+R[row*3+1]+", "+
+                                R[row*3+2]+", "+t[row]+"]"
+                        }
+                        lines[matrixStart+4]=
+                            "    - [0.0, 0.0, 0.0, 1.0]"
+                        replacement=lines.joinToString("\n")
+                        calibrationSource=if(reference==
+                            CameraCharacteristics.LENS_POSE_REFERENCE_GYROSCOPE)
+                            "Android gyro-referenced lens pose seed"
+                            else "Android lens rotation, zero translation seed"
+                    }
+                }
+            }
             if(replacement!=old)config.writeText(replacement)
             java.io.File(root,"config/PIXEL_CALIBRATION_WARNING.txt").writeText(
                 "Camera2 intrinsics rescaled with approximate centered crop. "+
-                "Calibration distortion / T_cam_imu / time offset are NOT "+
+                "Camera2 distortion/rotation are used when supplied; T_cam_imu and time offset are NOT "+
                 "verified for Pixel 10 Pro XL. Do not trust metric positions.\n"+
                 "id="+id+" K="+fx+","+fy+","+cx+","+cy+"\n"+
+                "seed="+calibrationSource+"\n"+
                 "source="+info.get(
                     CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)+"\n")
             Log.w(TAG,"Camera2 intrinsics updated; Pixel IMU extrinsics NOT calibrated")
