@@ -108,6 +108,11 @@ internal class PhotoSessionStore(context: Context) {
                 zip.closeEntry()
             }
             entry(File(session,"session.json"))
+            // Continuous gyro/accelerometer streams are required for VIO.
+            session.listFiles()?.filter {
+                it.isFile && it.name.startsWith("imu_") &&
+                    it.name.endsWith(".csv")
+            }?.sortedBy { it.name }?.forEach { entry(it) }
             selected.forEach { frame ->
                 entry(frame.jpeg)
                 entry(frame.metadata)
