@@ -130,7 +130,8 @@ class OfflineReconstructionActivity:Activity() {
                         " DA3-Bilder · "+result.pairedImages+
                         " Posen zugeordnet\n"+
                         result.acceptedPairs+" gültige VO-Schritte · "+
-                        result.lostPairs+" unzuverlässig\n"+
+                        result.lostPairs+" unzuverlässig · "+
+                        (result.trajectory?.gyroFusedPairs?:0)+" IMU-Rotationen\n"+
                         "Relativer Maßstab – kein metrisches Mesh."
                     calculate.text="Erneut auswerten"
                     calculate.isEnabled=true
