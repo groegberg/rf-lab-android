@@ -80,15 +80,8 @@ object RgbdSurfaceMesher {
             val wz = m[2] * px + m[6] * py + m[10] * pz + m[14]
             if (!wx.isFinite() || !wy.isFinite() || !wz.isFinite()) continue
 
-            grid[gy * nx + gx] = count
-            val vi = count * 3
-            pos[vi] = wx
-            pos[vi + 1] = wy
-            pos[vi + 2] = wz
-            distances[count] = depth
-
-            // 4 calibrated texture->CPU-image corner correspondences.
-            // The mapping is bilinear to accommodate rotation/crop changes.
+            // The camera JPEG can cover a smaller crop than ARCore depth.
+            // Reject untexturable vertices instead of stretching edge colours.
             val s = (x + .5f) / w
             val t = (y + .5f) / h
             fun interpolate(offset: Int): Float {
@@ -96,8 +89,19 @@ object RgbdSurfaceMesher {
                 val bottom = corners[4 + offset] * (1f - s) + corners[6 + offset] * s
                 return top * (1f - t) + bottom * t
             }
-            uv[count * 2] = interpolate(0)
-            uv[count * 2 + 1] = interpolate(1)
+            val u = interpolate(0)
+            val v = interpolate(1)
+            if (!u.isFinite() || !v.isFinite() ||
+                u !in 0f..1f || v !in 0f..1f) continue
+
+            grid[gy * nx + gx] = count
+            val vi = count * 3
+            pos[vi] = wx
+            pos[vi + 1] = wy
+            pos[vi + 2] = wz
+            distances[count] = depth
+            uv[count * 2] = u
+            uv[count * 2 + 1] = v
             count++
             if (rawValid) measured++ else estimated++
         }
