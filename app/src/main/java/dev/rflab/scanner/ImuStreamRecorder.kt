@@ -18,7 +18,7 @@ internal class ImuStreamRecorder(private val session: File) : AutoCloseable {
     private val file = File(session, "imu_" +
         SystemClock.elapsedRealtimeNanos().toString() + ".csv")
     private val writer: BufferedWriter = file.outputStream()
-        .bufferedWriter(Charsets.UTF_8, 128 * 1024)
+        .bufferedWriter(Charsets.UTF_8)
     private var rows = 0
     init {
         writer.write("sensor_timestamp_ns,sensor_type,x,y,z,accuracy,callback_elapsed_ns\n")
