@@ -49,9 +49,9 @@ internal class PhotoStereoEstimator {
             image.getPixels(pixels, 0, image.width, 0, 0, image.width, image.height)
             val luminance = FloatArray(pixels.size) { i ->
                 val p = pixels[i]
-                .2126f * ((p ushr 16) and 255) +
-                    .7152f * ((p ushr 8) and 255) +
-                    .0722f * (p and 255)
+                0.2126f * ((p ushr 16) and 255) +
+                    0.7152f * ((p ushr 8) and 255) +
+                    0.0722f * (p and 255)
             }
             return Gray(image.width, image.height, luminance)
         } finally { image.recycle() }
@@ -182,7 +182,7 @@ internal object StereoGeometry {
 
     fun point(frame: StoredRgbdKeyframe,
               u: Float, v: Float, depth: Float): FloatArray {
-        val cx = frame.fx * 0f + frame.cx
+        val cx = frame.cx
         val px = (u * frame.width - cx) * depth / frame.fx
         val py = (frame.cy - v * frame.height) * depth / frame.fy
         val pz = -depth
