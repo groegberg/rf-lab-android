@@ -59,7 +59,7 @@ data class StoredRgbdKeyframe(
 class RgbdKeyframeArchive(context: Context) {
     private val directory = File(context.filesDir, "rflab_rgbd_keyframes_v1")
     private val writer = ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
-        ArrayBlockingQueue(3), ThreadPoolExecutor.AbortPolicy())
+        ArrayBlockingQueue<Runnable>(3), ThreadPoolExecutor.AbortPolicy())
     private val number = AtomicInteger(0)
     @Volatile private var generation = 0
     @Volatile private var accepted = 0
@@ -177,7 +177,8 @@ class RgbdKeyframeArchive(context: Context) {
         private fun floats(values: FloatArray): JSONArray =
             JSONArray().apply { values.forEach { put(it.toDouble()) } }
 
-        fun read(file: File): StoredRgbdKeyframe? = try {
+        fun read(file: File): StoredRgbdKeyframe? {
+            return try {
             if (file.length() > 12_000_000) return null
             ZipFile(file).use { zip ->
                 fun bytes(name: String, limit: Int): ByteArray {
@@ -209,6 +210,7 @@ class RgbdKeyframeArchive(context: Context) {
                     array("texture_to_image_corners", 8),
                     bytes("color.jpg", 8_500_000), full, raw, conf)
             }
-        } catch (_: Exception) { null }
+            } catch (_: Exception) { null }
+        }
     }
 }
