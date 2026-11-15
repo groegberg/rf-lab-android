@@ -60,8 +60,12 @@ internal class PhotoSessionStore(context: Context) {
     fun save(session: File, jpeg: ByteArray, metadata: JSONObject): Frame {
         require(allowed(session))
         require(jpeg.size in 20_000..15_000_000) { "Bad JPEG length" }
-        val count = frames(session).size
-        require(count < 240) { "Session photo limit reached" }
+        val existing = frames(session)
+        require(existing.size < 240) { "Session photo limit reached" }
+        val count = (existing.mapNotNull {
+            it.jpeg.name.removePrefix("img_").removeSuffix(".jpg").toIntOrNull()
+        }.maxOrNull() ?: -1) + 1
+        require(count < 10_000) { "Session photo index limit" }
         val total = session.listFiles()?.sumOf { it.length() } ?: 0L
         require(total + jpeg.size <= 550L * 1024L * 1024L) { "Session storage limit" }
         val name = "img_%04d".format(Locale.US,count)
