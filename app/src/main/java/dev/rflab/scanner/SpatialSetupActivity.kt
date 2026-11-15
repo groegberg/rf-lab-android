@@ -173,38 +173,39 @@ class SpatialSetupActivity : Activity() {
 
     private fun scanStep() {
         add(body, label("Deine Wohnung in 3D", 22f, ink, true), bottom = 8)
-        val openScanner = button(
-            if (scan.hasScan()) "●  Scan fortsetzen" else "●  Kamera öffnen",
-            true
-        ) {
+        add(body, button(if (scan.hasScan()) "●  Scan fortsetzen"
+            else "●  Kamera öffnen", true) {
             startActivityForResult(Intent(this, SpatialScanActivity::class.java), scanRequest)
+        }, bottom = 8)
+        val frames = RgbdKeyframeArchive(this).let {
+            val count = it.files().size
+            it.shutdown()
+            count
         }
-        add(body, openScanner, bottom = 8)
         if (scan.pointCount() > 0) {
             val previewDp = (resources.displayMetrics.heightPixels /
                 resources.displayMetrics.density * .48f).toInt().coerceIn(300, 650)
             scanView(false, previewDp)
-            add(body, label(
-                scan.pointCount().toString() + " Punkte  ·  " +
+            add(body, label(scan.pointCount().toString() + " Punkte · " +
                 scan.poseCount().toString() + " Kamerapositionen",
-                12f, muted
-            ), bottom = 10)
-            val frames = RgbdKeyframeArchive(this).let {
-                val count = it.files().size
-                it.shutdown()
-                count
-            }
-            if (frames > 0) {
+                12f, muted), bottom = 10)
+        } else if (frames == 0) {
+            add(body, label("Bewege die Kamera langsam durch den Raum.",
+                13f, muted), bottom = 12)
+        }
+        if (frames > 0) {
+            add(body, button("5 Tiefenverfahren vergleichen  ›", true) {
+                startActivity(Intent(this, DepthComparisonActivity::class.java))
+            }, bottom = 10)
+            if (scan.pointCount() > 0) {
                 add(body, button("Kameratexturiertes 3D-Mesh  ›") {
                     startActivity(Intent(this, RgbdSurfaceViewerActivity::class.java))
                 }, bottom = 9)
-                add(body, button("5 Tiefenverfahren vergleichen  ›", true) {
-                    startActivity(Intent(this, DepthComparisonActivity::class.java))
-                }, bottom = 10)
+            } else {
+                add(body, label(frames.toString() +
+                    " Fotos gespeichert · KI- und Foto-Stereo-Vergleich verfügbar",
+                    12f, muted), bottom = 10)
             }
-        } else {
-            add(body, label("Bewege die Kamera langsam durch den Raum.",
-                13f, muted), bottom = 12)
         }
         add(body, row(
             button("Backup sichern") { exportBackup() },
