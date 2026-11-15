@@ -1,3 +1,20 @@
+# RF Lab v0.9.0-dev — Five depth algorithms, one room recording
+
+A new **on-device comparison laboratory** runs on the same captured room
+photos: ARCore Raw, ARCore Full, real **RGB photographic stereo**, genuine
+**Depth Anything 3 Small** (LiteRT GPU/CPU), and multi-view consistency.
+The camera-only capture fallback also works if optical depth is unavailable.
+
+Depth Anything 3 is **bundled in the APK (55 MB model)** and runs offline.
+Its single-image output is **relative depth, not meters**. RGB stereo
+does not use ARCore depth but still relies on camera poses from ARCore
+tracking. A global metric photogrammetry/TSDF pipeline and Gaussian
+Splatting are not yet implemented.
+
+[Method-by-method explanation and comparison protocol](docs/DEPTH_METHODS_V090.md)
+
+---
+
 # RF Lab v0.8.0-dev — Clean scanner + cross-view geometry checks
 
 The new **camera-first** room scanner gives the live view and spatial map
