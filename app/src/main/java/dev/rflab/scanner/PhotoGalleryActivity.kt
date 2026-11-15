@@ -48,7 +48,7 @@ class PhotoGalleryActivity: Activity() {
         session=store.sessions().firstOrNull{it.name==selected}
             ?:store.sessions().firstOrNull()?:store.newSession()
         val root=LinearLayout(this).apply{
-            orientation=LinearLayout.VERTICAL;setBackgroundColor(background)
+            orientation=LinearLayout.VERTICAL;setBackgroundColor(this@PhotoGalleryActivity.background)
             setPadding(dp(10),dp(7),dp(10),0)
         }
         setContentView(root)
@@ -89,7 +89,7 @@ class PhotoGalleryActivity: Activity() {
         summary.text=entries.size.toString()+" Fotos · nur lokal gespeichert\n"+
             "Originalbilder · noch keine SLAM-Kameraposen"
         selector.text=session.name.removePrefix("session_")+"  ▾"
-        val width=(resources.displayMetrics.widthPixels-dp(48))/3
+        val columnWidth=(resources.displayMetrics.widthPixels-dp(48))/3
         entries.forEachIndexed{index,f->
             val tile=LinearLayout(this).apply{
                 orientation=LinearLayout.VERTICAL
@@ -113,7 +113,7 @@ class PhotoGalleryActivity: Activity() {
             })
             val spec=GridLayout.LayoutParams(
                 GridLayout.spec(index/3),GridLayout.spec(index%3)).apply{
-                width=width
+                width=columnWidth
                 height=dp(150)
                 setMargins(dp(4),dp(4),dp(4),dp(4))
             }
