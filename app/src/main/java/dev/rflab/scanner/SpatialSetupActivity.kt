@@ -39,6 +39,8 @@ class SpatialSetupActivity : Activity() {
     private val titles = listOf("3D-SCAN", "RÄUME", "MESSEN", "GERÄTE", "AUTOMATION")
     private var firstCorner: Pair<Float, Float>? = null
     private val scanRequest = 611
+    private val backupExportRequest = 612
+    private val backupImportRequest = 613
     private fun dp(v: Int) = (v * resources.displayMetrics.density + .5f).toInt()
     private fun label(value: String, size: Float = 13f, color: Int = ink,
                       bold: Boolean = false): TextView =
@@ -199,6 +201,10 @@ class SpatialSetupActivity : Activity() {
             else navigate(2)
         }, 10)
         add(body, help, bottom = 12)
+        add(body, row(
+            button("Wohnung sichern") { exportBackup() },
+            button("Backup laden") { importBackupDialog() }
+        ), bottom = 12)
     }
 
     private fun roomsStep() {
@@ -335,7 +341,11 @@ class SpatialSetupActivity : Activity() {
             12.5f), 9)
         add(c, button("REGELN EINRICHTEN", true) { openHome(3) }, 11)
         add(body, c, bottom = 11)
-        add(body, button("Zum Spatial-Home-Dashboard") { openHome(0) })
+        add(body, button("Zum Spatial-Home-Dashboard") { openHome(0) }, bottom = 9)
+        add(body, row(
+            button("Komplettes Backup") { exportBackup() },
+            button("Backup wiederherstellen") { importBackupDialog() }
+        ))
     }
 
     private fun openSensorForRoom(activity: Class<out Activity>) {
@@ -351,6 +361,54 @@ class SpatialSetupActivity : Activity() {
             }.show()
     }
 
+    private fun exportBackup() {
+        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "rflab_full_home_scan_backup.json")
+        }, backupExportRequest)
+    }
+
+    private fun importBackupDialog() {
+        AlertDialog.Builder(this).setTitle("Gesamtes Spatial-Home-Backup einspielen?")
+            .setMessage("Die vorhandene Wohnungskarte, der 3D-Scan und alle " +
+                "zugeordneten Magnet- und Akustikprofile werden ersetzt. " +
+                "Bitte vorher ein Backup exportieren.")
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Backup auswählen") { _, _ ->
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/json"
+                }, backupImportRequest)
+            }.show()
+    }
+
+    private fun importBackup(uri: android.net.Uri) {
+        try {
+            val input = contentResolver.openInputStream(uri) ?: error("Datei nicht lesbar")
+            val bytes = input.use { stream ->
+                val out = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(16384)
+                while (true) {
+                    val read = stream.read(chunk)
+                    if (read < 0) break
+                    if (out.size() + read > 18_000_000) error("Backup größer als 18 MB")
+                    out.write(chunk, 0, read)
+                }
+                out.toByteArray()
+            }
+            if (SpatialFullBackup.import(this, String(bytes, Charsets.UTF_8))) {
+                home = SpatialHomeStore(this)
+                scan = RoomScanStore(this)
+                firstCorner = null
+                toast("Wohnung, 3D-Scan und Raumprofile wiederhergestellt.")
+                render()
+            } else toast("Ungültiges Backup – bestehende Daten wurden beibehalten.")
+        } catch (e: Exception) {
+            toast("Backup-Import: " + (e.message ?: e.javaClass.simpleName))
+        }
+    }
+
     private fun openHome(tab: Int) {
         startActivity(Intent(this, SpatialHomeActivity::class.java).apply {
             putExtra("open_tab", tab)
@@ -359,9 +417,24 @@ class SpatialSetupActivity : Activity() {
     @Deprecated("Simple scan result integration")
     override fun onActivityResult(request: Int, result: Int, data: Intent?) {
         super.onActivityResult(request, result, data)
-        if (request == scanRequest && result == RESULT_OK) {
-            scan = RoomScanStore(this)
-            navigate(1)
+        if (result != RESULT_OK) return
+        when (request) {
+            scanRequest -> {
+                scan = RoomScanStore(this)
+                navigate(1)
+            }
+            backupImportRequest -> data?.data?.let { importBackup(it) }
+            backupExportRequest -> {
+                try {
+                    val uri = data?.data ?: return
+                    contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use {
+                        it.write(SpatialFullBackup.export(this))
+                    } ?: error("Datei nicht schreibbar")
+                    toast("Gesamtes Spatial-Home-Backup gespeichert.")
+                } catch (e: Exception) {
+                    toast("Backup-Export: " + (e.message ?: e.javaClass.simpleName))
+                }
+            }
         }
     }
 }
