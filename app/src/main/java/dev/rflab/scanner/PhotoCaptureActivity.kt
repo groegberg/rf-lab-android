@@ -252,6 +252,14 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                 .put("device_id",deviceId)
                 .put("lens_intrinsics_active_array_px",
                     PhotoSessionStore.floats(intrinsics))
+                .put("lens_pose_sensor_to_camera_quaternion_xyzw",
+                    PhotoSessionStore.floats(
+                        info.get(CameraCharacteristics.LENS_POSE_ROTATION)))
+                .put("lens_pose_reference",
+                    info.get(CameraCharacteristics.LENS_POSE_REFERENCE))
+                .put("lens_pose_translation_m",
+                    PhotoSessionStore.floats(
+                        info.get(CameraCharacteristics.LENS_POSE_TRANSLATION)))
                 .put("distortion",PhotoSessionStore.floats(distortion))
                 .put("active_array",crop?.let {
                     JSONArray().put(it.left).put(it.top).put(it.right).put(it.bottom)
