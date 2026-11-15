@@ -305,14 +305,14 @@ class SpatialHomeActivity : Activity() {
         if (candidates.isEmpty()) add(probs, text("Noch keine auswertbaren Fingerprints.", 12f))
         else candidates.take(5).forEach {
             add(probs, text(it.name + " · " +
-                (it.probability * 100).toInt() + "% · RMS/Strafe " +
+                (it.probability * 100).toInt() + "% · Rohscore " +
                 String.format(Locale.GERMAN, "%.1f", it.scoreDbm) +
                 " dB · " + it.overlap + " gemeinsame BSSIDs", 12f), 7)
         }
         add(content, probs, bottom = 12)
-        note("Die Markierung im Grundriss zeigt den nächstpassenden eingemessenen Punkt, " +
-            "keinen kontinuierlich getrackten Standort. Ohne ARCore gibt es keine metrische " +
-            "Feinposition. Ortung läuft derzeit nur bei sichtbarer App.")
+        note("Die Prozentwerte sind vorläufige, nicht statistisch kalibrierte Modellgewichte. " +
+            "Die Markierung zeigt den ähnlichsten Messpunkt, keine genaue Distanz. " +
+            "Ortung funktioniert derzeit nur, während die App sichtbar ist.")
     }
 
     private fun roomsPage() {
@@ -517,6 +517,14 @@ class SpatialHomeActivity : Activity() {
             " · eingemessene Punkte: " + home.anchors.count { it.sweeps.isNotEmpty() }, 12f))
         add(quality, text("Frische Scans: " + freshCount +
             " · letzte Aufnahme: " + (lastSweep?.readings?.size ?: 0) + " BSSIDs", 12f), 7)
+        val validation = SpatialValidator().validate(home.rooms, home.anchors)
+        val vtext = if (validation.tested == 0)
+            "Kreuzvalidierung noch nicht möglich: mindestens zwei Messpunkte pro Raum " +
+                "in mindestens zwei Räumen erforderlich."
+        else "Messpunktprüfung: " + validation.correct + "/" + validation.tested +
+            " richtig · " + validation.wrong + " falsch · " + validation.unknown +
+            " unbekannt. Stichprobe klein, keine Genauigkeitsgarantie."
+        add(quality, text(vtext, 11.5f, if (validation.wrong > 0) orange else quiet), 10)
         add(quality, action("Vorhandene Nachtmessung übernehmen") { importManual() }, 10)
         add(content, quality, bottom = 12)
         note("Android limitiert aktive WLAN-Scans. Wir verwenden nur frische AP-Daten " +
