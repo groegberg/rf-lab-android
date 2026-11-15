@@ -262,6 +262,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
             intrinsics=info.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
             distortion=info.get(CameraCharacteristics.LENS_DISTORTION)
             crop=info.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            val precorrect=info.get(
+                CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
             fpsRange=info.get(
                 CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?.filter{it.lower<=30 && it.upper>=30}
@@ -287,6 +289,11 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                 .put("active_array",crop?.let {
                     JSONArray().put(it.left).put(it.top).put(it.right).put(it.bottom)
                 })
+                .put("pre_correction_active_array",precorrect?.let{
+                    JSONArray().put(it.left).put(it.top).put(it.right).put(it.bottom)
+                })
+                .put("lens_intrinsics_reference",
+                    "Camera2 preCorrectionActiveArraySize; processed YUV crop approximate")
                 .put("sensor_physical_size_mm",physicalSize?.let{
                     JSONArray().put(it.width).put(it.height)
                 })
