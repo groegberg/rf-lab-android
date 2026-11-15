@@ -105,7 +105,7 @@ class ArPoseTracker(
                 return false
             }
             val newSession = Session(activity)
-            val cameraSelection = selectWidestSupportedRearCamera(newSession)
+            val cameraSelection = selectBestGeometryCamera(newSession)
             depthAvailable = depthObserver != null && !sweepRequested &&
                 newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
             if (depthAvailable) {
@@ -321,61 +321,61 @@ class ArPoseTracker(
 
 
     /**
-     * ARCore only allows camera IDs in its own supported-config list.
-     * Prefer the widest rear-camera ID that Camera2 can characterize.
-     * Never use a physical camera through Camera2 while ARCore owns the session.
+     * Prefer the calibrated ARCore default lens for accurate indoor scanning.
+     * Previously auto-selecting the widest camera could reduce image detail.
+     * Only switch within the SAME camera ID to a 30-fps high-resolution CPU
+     * image if ARCore confirms that AUTOMATIC Depth remains supported.
+     * All other camera configurations remain available in diagnostics.
      */
-    private fun selectWidestSupportedRearCamera(newSession: Session): JSONObject {
-        val result = JSONObject().put("preference", "widest_ARCore_supported_rear_camera")
+    private fun selectBestGeometryCamera(newSession: Session): JSONObject {
+        val original = newSession.cameraConfig
+        val result = JSONObject()
+            .put("strategy", "main_lens_quality_first")
+            .put("default_camera_id", original.cameraId)
         try {
             val configs = newSession.getSupportedCameraConfigs(
-                CameraConfigFilter(newSession).setFacingDirection(CameraConfig.FacingDirection.BACK))
-            val cameraManager = activity.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val samples = JSONArray()
-            var best: CameraConfig? = null
-            var bestFov = Double.NEGATIVE_INFINITY
-            val defaultId = newSession.cameraConfig.cameraId
-            var defaultFov = Double.NEGATIVE_INFINITY
-            for (config in configs) {
-                val horizontalFov = try {
-                    val ch = cameraManager.getCameraCharacteristics(config.cameraId)
-                    val physical = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                    val focals = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                    if (physical != null && focals != null && focals.isNotEmpty()) {
-                        val f = focals.filter { it > 0f }.minOrNull() ?: 0f
-                        if (f > 0f) 2.0 * atan(physical.width / (2.0 * f)) * 180.0 / Math.PI
-                        else Double.NaN
-                    } else Double.NaN
-                } catch (_: Exception) { Double.NaN }
-                samples.put(arConfigSpec(config, samples.length())
-                    .put("estimated_horizontal_fov_deg", if (horizontalFov.isFinite()) horizontalFov else JSONObject.NULL))
-                if (config.cameraId == defaultId && horizontalFov.isFinite()) defaultFov = horizontalFov
-                if (horizontalFov.isFinite() && horizontalFov > bestFov) {
-                    bestFov = horizontalFov
-                    best = config
+                CameraConfigFilter(newSession)
+                    .setFacingDirection(CameraConfig.FacingDirection.BACK))
+            val candidates = configs.filter {
+                it.cameraId == original.cameraId &&
+                it.fpsRange.upper >= 30 &&
+                it.imageSize.width > 0 && it.imageSize.height > 0 &&
+                it.imageSize.width * it.imageSize.height <= 2_250_000
+            }
+            val best = candidates.maxByOrNull {
+                it.imageSize.width * it.imageSize.height
+            }
+            val defaultPixels = original.imageSize.width * original.imageSize.height
+            var upgraded = false
+            if (best != null &&
+                best.imageSize.width * best.imageSize.height > defaultPixels) {
+                try {
+                    newSession.cameraConfig = best
+                    if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                        upgraded = true
+                    } else newSession.cameraConfig = original
+                } catch (_: Exception) {
+                    newSession.cameraConfig = original
                 }
             }
-            // A wide-angle change must be significant; unknown or logical camera IDs retain ARCore's default.
-            val chooseWide = best != null && best!!.cameraId != defaultId &&
-                bestFov > (if (defaultFov.isFinite()) defaultFov + 10.0 else 90.0)
-            if (chooseWide) newSession.cameraConfig = best!!
             val selected = newSession.cameraConfig
-            result.put("supported_configs", samples)
-                .put("available_config_count", configs.size)
-                .put("default_camera_id", defaultId)
+            result.put("config_count", configs.size)
+                .put("compatible_main_lens_configs", candidates.size)
                 .put("selected_camera_id", selected.cameraId)
-                .put("wide_config_selected", chooseWide)
-                .put("selection_note", if (chooseWide) "Widest supported ARCore camera selected"
-                    else "Retaining default ARCore camera; no proven wider supported rear ID")
-            report("ARCore Kamera-ID: ${selected.cameraId}; Ultraweitwinkel ${if (chooseWide) "ausgewählt" else "nicht als separate ARCore-Kamera bestätigt"}")
+                .put("cpu_width", selected.imageSize.width)
+                .put("cpu_height", selected.imageSize.height)
+                .put("higher_resolution_selected", upgraded)
+                .put("ultrawide_auto_selected", false)
+                .put("reason", "Prefer pixel detail and stable ARCore Depth over widest FoV")
+            report("Kamera: " + selected.imageSize.width + "×" +
+                selected.imageSize.height + " · Hauptkamera, metrisches RGB-D")
         } catch (e: Exception) {
-            result.put("selection_error", e.message ?: e.javaClass.simpleName)
-            result.put("selected_camera_id", newSession.cameraConfig.cameraId)
-            report("ARCore Kameraauswahl: Standardmodus (${e.javaClass.simpleName})")
+            result.put("selection_error", e.javaClass.simpleName)
+                .put("selected_camera_id", newSession.cameraConfig.cameraId)
+            report("Kameramodus: ARCore-Standard")
         }
         return result
     }
-
 
 
     /** New raw depth plus lower-priority interpolated depth, coloured by CPU YUV. */
