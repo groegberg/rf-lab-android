@@ -126,6 +126,8 @@ class SpatialScanActivity : Activity() {
     override fun onPause() {
         handler.removeCallbacks(ticker)
         if (active) stopCapture(true)
+        else if (!scan.complete && scan.pointCount() >= 50 && scan.poseCount() >= 3)
+            scan.finish()
         super.onPause()
     }
 
@@ -138,7 +140,8 @@ class SpatialScanActivity : Activity() {
             "ARCore-Posen: %d · 3D-Punkte: %d · Depth-Frames: %d\n%s",
             poses, points, sampled, lastMessage)
         cloud.invalidate()
-        start.text = if (active) "Scan pausieren" else "3D-Scan starten"
+        start.text = if (active) "Scan beenden"
+            else if (scan.pointCount() > 0) "Neuen Scan starten" else "3D-Scan starten"
         finish.isEnabled = points >= 50 && poses >= 3
     }
 
@@ -149,7 +152,7 @@ class SpatialScanActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), cameraRequest)
             return
         }
-        if (scan.hasScan()) {
+        if (scan.pointCount() > 0) {
             val hasRooms = SpatialHomeStore(this).rooms.isNotEmpty()
             if (hasRooms) {
                 AlertDialog.Builder(this).setTitle("Alte Raumzuordnung erhalten")
@@ -159,11 +162,13 @@ class SpatialScanActivity : Activity() {
                     .setPositiveButton("OK", null).show()
                 return
             }
-            AlertDialog.Builder(this).setTitle("Vorherigen 3D-Scan ersetzen?")
-                .setMessage("Der bisherige optische Scan wird ersetzt. " +
-                    "Vorher den Scan bei Bedarf in der App betrachten.")
+            AlertDialog.Builder(this).setTitle("3D-Scan wirklich neu beginnen?")
+                .setMessage("Der bereits gemessene Scan mit " +
+                    scan.pointCount() + " optischen Punkten würde verworfen. " +
+                    "Eine neue ARCore-Sitzung hat ein eigenes Koordinatensystem; " +
+                    "beide dürfen nicht ohne Registrierung kombiniert werden.")
                 .setNegativeButton("Abbrechen", null)
-                .setPositiveButton("Neuen Scan starten") { _, _ -> startCapture() }.show()
+                .setPositiveButton("Alten ersetzen") { _, _ -> startCapture() }.show()
         } else startCapture()
     }
 
@@ -202,7 +207,7 @@ class SpatialScanActivity : Activity() {
         if (saveIfEnough && scan.pointCount() >= 50 && scan.poseCount() >= 3) {
             scan.finish()
             lastMessage = "Scan automatisch gesichert (App-Wechsel)."
-        } else lastMessage = "Scan pausiert. Zur Sicherung 'Scan sichern' drücken."
+        } else lastMessage = "Scan beendet. 'Scan sichern' oder bewusst neuen Scan starten."
         refresh()
     }
 
