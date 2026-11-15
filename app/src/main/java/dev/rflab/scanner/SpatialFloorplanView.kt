@@ -16,6 +16,7 @@ class SpatialFloorplanView(context: Context) : View(context) {
     var activeRoomId: String? = null
     var activeAnchorId: String? = null
     var estimate: RoomEstimate? = null
+    var locationHint: SpatialHint? = null
     var onTap: ((Float, Float) -> Unit)? = null
     var showPoints = true
     var showDevices = true
@@ -128,6 +129,21 @@ class SpatialFloorplanView(context: Context) : View(context) {
             paint.strokeWidth = 2f * density
             canvas.drawCircle(px(matchedAnchor.x), py(matchedAnchor.z), density * 18f, paint)
             paint.style = Paint.Style.FILL
+        }
+        locationHint?.let { h ->
+            val pxScale = vp.width() / extent.width()
+            val pyScale = vp.height() / extent.height()
+            val radius = h.uncertaintyM * min(pxScale, pyScale)
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(28, 81, 225, 232)
+            canvas.drawCircle(px(h.x), py(h.z), radius, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = density * 1.5f
+            paint.color = Color.argb(175, 81, 225, 232)
+            canvas.drawCircle(px(h.x), py(h.z), radius, paint)
+            paint.style = Paint.Style.FILL
+            paint.color = Color.WHITE
+            canvas.drawCircle(px(h.x), py(h.z), density * 4.5f, paint)
         }
         if (rooms.isEmpty()) {
             paint.style = Paint.Style.FILL
