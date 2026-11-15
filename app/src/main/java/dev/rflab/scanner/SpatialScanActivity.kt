@@ -33,6 +33,7 @@ class SpatialScanActivity : Activity() {
     private lateinit var cloud: ScanCloudView
     private lateinit var archive: RgbdKeyframeArchive
     private lateinit var surfaceButton: Button
+    private lateinit var exportButton: Button
     private lateinit var stats: TextView
     private lateinit var guidance: TextView
     private lateinit var start: Button
@@ -41,6 +42,7 @@ class SpatialScanActivity : Activity() {
     private var active = false
     private var lastMessage = "Kamera auf gut beleuchtete Flächen richten."
     private val cameraRequest = 451
+    private val rgbdExportRequest = 452
     private val ticker = object : Runnable {
         override fun run() {
             refresh()
@@ -116,6 +118,20 @@ class SpatialScanActivity : Activity() {
             }
         }
         stack.addView(surfaceButton, LinearLayout.LayoutParams(-1, dp(52)))
+        exportButton = Button(this).apply {
+            isAllCaps = false
+            text = "RGB-D-Rohdaten sichern (.zip)"
+            setOnClickListener {
+                if (active) stopCapture(true)
+                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_TITLE, "rflab_rgbd_v070_keyframes.zip")
+                }
+                startActivityForResult(intent, rgbdExportRequest)
+            }
+        }
+        stack.addView(exportButton, LinearLayout.LayoutParams(-1, dp(50)))
         stats = text("", 12f, Color.WHITE)
         stack.addView(stats, LinearLayout.LayoutParams(-1, dp(112)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -174,6 +190,7 @@ class SpatialScanActivity : Activity() {
             else if (scan.pointCount() > 0) "Neuen Scan starten" else "3D-Scan starten"
         finish.isEnabled = points >= 50 && poses >= 3
         surfaceButton.isEnabled = archive.savedCount > 0
+        exportButton.isEnabled = archive.savedCount > 0
     }
 
     private fun requestStart() {
@@ -257,6 +274,30 @@ class SpatialScanActivity : Activity() {
         }
         setResult(RESULT_OK)
         finish()
+    }
+
+    @Deprecated("Uses Android Storage Access Framework result callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != rgbdExportRequest || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        Thread({
+            try {
+                val written = contentResolver.openOutputStream(uri)?.use {
+                    archive.exportTo(it)
+                } ?: error("Export destination unavailable")
+                runOnUiThread {
+                    if (!isFinishing) Toast.makeText(this,
+                        "$written RGB-D-Keyframes exportiert.", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!isFinishing) Toast.makeText(this,
+                        "RGB-D-Export fehlgeschlagen: " + e.javaClass.simpleName,
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }, "RgbdExport").start()
     }
 
     override fun onDestroy() {
