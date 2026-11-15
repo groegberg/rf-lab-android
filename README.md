@@ -1,3 +1,29 @@
+# RF Lab v1.0.0-dev — Controlled Camera2 photo capture for future visual-inertial SLAM
+
+**New default scan acquisition:** independent Camera2 JPEG camera preview
+with a user-controlled shutter, optional sharpness/overlap-aware automatic
+capture, live independent optical feature tracking diagnostics, and a local
+photo gallery with deletion and original-data export.
+
+Each photo stores camera sensor exposure timestamp, ISO, focal length,
+available lens intrinsics/distortion, focus, rotation, optical quality,
+and timebase status. Full timestamped gyro/accelerometer streams (including
+uncalibrated sensors when available) are preserved in the exported dataset.
+
+**Depth Anything 3 Small remains bundled in the offline APK** and can be
+run directly on any photo in the gallery, without an ARCore session. The
+previous ARCore scanner is still available as an explicitly legacy option.
+
+**Accuracy boundary:** the independent optical tracker counts and matches
+2D features; it is NOT YET an independent 6DoF VIO/SLAM backend.
+No bundle adjustment, loop closure or independent metric 3D reconstruction
+is claimed. This milestone supplies controlled high-quality input data and
+timebase-safe measurements to implement those correctly.
+
+[Setup, field tests, privacy and limitations](docs/CAMERA2_VIO_V100.md)
+
+---
+
 # RF Lab v0.9.0-dev — Five depth algorithms, one room recording
 
 A new **on-device comparison laboratory** runs on the same captured room
