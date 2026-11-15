@@ -111,6 +111,11 @@ internal class PhotoSessionStore(context: Context) {
             File(session,"camera.json").takeIf { it.isFile }?.let{entry(it)}
             // Actual 10Hz camera frames are required for offline odometry.
             MotionFrameStore.files(session).forEach { entry(it) }
+            // Per-frame sensor shutter, exposure and crop calibration stream.
+            session.listFiles()?.filter {
+                it.isFile && it.name.startsWith("camera_timing_") &&
+                    it.name.endsWith(".csv")
+            }?.sortedBy { it.name }?.forEach { entry(it) }
             // Offline pose and relative DA3 maps remain private exports.
             session.listFiles()?.filter{
                 it.isDirectory && it.name.startsWith("offline_")
