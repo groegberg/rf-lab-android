@@ -88,6 +88,7 @@ class SpatialScanActivity : Activity() {
             setBackgroundColor(bg)
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
