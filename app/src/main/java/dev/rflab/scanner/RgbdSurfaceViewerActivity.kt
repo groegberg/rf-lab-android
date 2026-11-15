@@ -83,28 +83,41 @@ class RgbdSurfaceViewerActivity : Activity() {
         Thread({
             val stride = ceil(files.size.toDouble() / MAX_PREVIEW_FRAMES).toInt()
                 .coerceAtLeast(1)
+            val loadedFrames = files.indices.step(stride).take(MAX_PREVIEW_FRAMES)
+                .mapNotNull { RgbdKeyframeArchive.read(files[it]) }
             var loaded = 0
             var triangles = 0
-            var rawVertices = 0
-            for (i in files.indices step stride) {
+            var confirmed = 0
+            var rejected = 0
+            for (frame in loadedFrames) {
                 if (isFinishing || isDestroyed) break
-                val frame = RgbdKeyframeArchive.read(files[i]) ?: continue
-                val mesh = RgbdSurfaceMesher.build(frame)
+                val fx = frame.cameraWorld[12]
+                val fy = frame.cameraWorld[13]
+                val fz = frame.cameraWorld[14]
+                val neighbors = loadedFrames.asSequence()
+                    .filter { it !== frame }
+                    .sortedBy {
+                        val dx = it.cameraWorld[12] - fx
+                        val dy = it.cameraWorld[13] - fy
+                        val dz = it.cameraWorld[14] - fz
+                        dx * dx + dy * dy + dz * dz
+                    }.take(6).toList()
+                val mesh = RgbdSurfaceMesher.build(frame, neighbors = neighbors)
                 if (mesh.triangleCount < 2) continue
                 val bitmap = decodeScaled(frame.imageJpeg) ?: continue
                 triangles += mesh.triangleCount
-                rawVertices += mesh.measuredVertices
+                confirmed += mesh.multiviewConfirmed
+                rejected += mesh.multiviewRejected
                 surface.enqueue(mesh, bitmap)
                 loaded++
-                val message = "Flächenframes: $loaded/" +
-                    min(files.size, MAX_PREVIEW_FRAMES) +
-                    " · Dreiecke: $triangles · Raw-Vertices: $rawVertices\n" +
-                    "Kamerafarbiges Flächenmesh (ohne TSDF-Fusion)"
+                val message = "3D-Mesh · $loaded/${loadedFrames.size} Bilder" +
+                    " · $triangles Dreiecke" +
+                    "\nMehrbild: $confirmed bestätigt · $rejected verworfen"
                 runOnUiThread { if (!isFinishing) status.text = message }
             }
             if (loaded == 0) runOnUiThread {
                 if (!isFinishing) status.text =
-                    "Keine ausreichenden Tiefenflächen gefunden. Weitere Bilder aufnehmen."
+                    "Noch keine zuverlässigen Tiefenflächen. Weitere Blickwinkel aufnehmen."
             }
         }, "RgbdMeshLoader").start()
     }
