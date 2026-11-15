@@ -14,6 +14,7 @@
         <meta-data android:name="com.google.ar.core" android:value="optional"/>
         <activity android:name=".AcousticLabActivity" android:exported="false"/>
         <activity android:name=".SpatialScanActivity" android:exported="false"/>
+        <activity android:name=".RgbdSurfaceViewerActivity" android:exported="false"/>
         <activity android:name=".MagneticLabActivity" android:exported="false"/>
         <activity android:name=".DiagnosticsActivity" android:exported="false"/>
         <activity android:name=".MainActivity" android:exported="false"/>
