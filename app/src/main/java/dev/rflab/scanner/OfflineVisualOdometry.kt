@@ -180,7 +180,7 @@ internal class OfflineVisualOdometry {
                         val p2=MatOfPoint2f(*q.toTypedArray())
                         val mask=Mat()
                         val E=Calib3d.findEssentialMat(p1,p2,k,
-                            Calib3d.RANSAC,.999,1.5,mask)
+                            Calib3d.RANSAC,.999,1.5,1500,mask)
                         if(!E.empty()&&E.rows()==3){
                             val relR=Mat();val relT=Mat()
                             try{
