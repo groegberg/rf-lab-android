@@ -165,6 +165,29 @@ class RgbdKeyframeArchive(context: Context) {
         }
     }
 
+    /**
+     * Explicit user-controlled export. Raw indoor photographs, poses and depth
+     * are privacy-sensitive. No automatic network/cloud upload occurs.
+     */
+    fun exportTo(destination: java.io.OutputStream): Int {
+        val snapshot = files()
+        java.util.zip.ZipOutputStream(destination.buffered()).use { zip ->
+            val manifest = JSONObject()
+                .put("schema", "rflab-rgbd-archive-export-v1")
+                .put("files", snapshot.size)
+                .put("privacy", "Contains room camera photos, depth maps and indoor poses")
+            zip.putNextEntry(java.util.zip.ZipEntry("manifest.json"))
+            zip.write(manifest.toString().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+            for (file in snapshot) {
+                zip.putNextEntry(java.util.zip.ZipEntry("keyframes/" + file.name))
+                file.inputStream().buffered().use { it.copyTo(zip, 64 * 1024) }
+                zip.closeEntry()
+            }
+        }
+        return snapshot.size
+    }
+
     fun shutdown() {
         writer.shutdown()
     }
