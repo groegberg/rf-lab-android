@@ -94,7 +94,12 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     private val imu=ArrayDeque<Sample>(360)
     private var imuRecorder: ImuStreamRecorder?=null
     private var motionRecorder: MotionFrameStore?=null
+    private var cameraTimingRecorder: CameraTimingRecorder?=null
+    private var sensorThread: HandlerThread?=null
+    private var sensorHandler: Handler?=null
     private var lastMotionNs=0L
+    private var health=VioSensorHealth()
+    private var fpsRange: android.util.Range<Int>?=null
 
     private fun dp(n:Int)=(n*resources.displayMetrics.density+.5f).toInt()
     private fun bg(color:Int)=GradientDrawable().apply {
@@ -179,16 +184,24 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         inFlight=false
         jpegQueue.clear(); metadataQueue.clear()
         lastAnalysisNs=0L
+        health=VioSensorHealth()
         imuRecorder=ImuStreamRecorder(directory)
         motionRecorder=MotionFrameStore(directory)
+        cameraTimingRecorder=CameraTimingRecorder(directory)
         lastMotionNs=0L
         thread=HandlerThread("RFPhotoCamera2").also{it.start()}
         handler=Handler(thread!!.looper)
+        // Dedicated high-rate sensor handler: never block the UI thread with
+        // full-rate inertial CSV writes (up to ~200 Hz per calibrated sensor).
+        sensorThread=HandlerThread("RFLabVioImu").also{it.start()}
+        sensorHandler=Handler(sensorThread!!.looper)
         listOf(Sensor.TYPE_GYROSCOPE,Sensor.TYPE_ACCELEROMETER,
             Sensor.TYPE_GYROSCOPE_UNCALIBRATED,
             Sensor.TYPE_ACCELEROMETER_UNCALIBRATED).forEach{type->
             sensors.getDefaultSensor(type)?.let {
-                sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_GAME)
+                val periodUs=if(type==Sensor.TYPE_GYROSCOPE ||
+                    type==Sensor.TYPE_ACCELEROMETER) 5_000 else 10_000
+                sensors.registerListener(this,it,periodUs,sensorHandler)
             }
         }
         if(view.isAvailable) openCamera()
@@ -196,6 +209,9 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     override fun onPause() {
         closing=true
         sensors.unregisterListener(this)
+        sensorHandler?.removeCallbacksAndMessages(null)
+        sensorThread?.quitSafely()
+        sensorThread=null; sensorHandler=null
         try { imuRecorder?.close() } catch (_:Exception) {}
         imuRecorder=null
         try { motionRecorder?.close() } catch (_:Exception) {}
@@ -203,6 +219,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         started=false
         try{session?.close()}catch(_:Exception){}
         try{camera?.close()}catch(_:Exception){}
+        try{cameraTimingRecorder?.close()}catch(_:Exception){}
+        cameraTimingRecorder=null
         try{photoReader?.close()}catch(_:Exception){}
         try{analysisReader?.close()}catch(_:Exception){}
         try{preview?.release()}catch(_:Exception){}
@@ -244,6 +262,11 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
             intrinsics=info.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
             distortion=info.get(CameraCharacteristics.LENS_DISTORTION)
             crop=info.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            fpsRange=info.get(
+                CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.filter{it.lower<=30 && it.upper>=30}
+                ?.minByOrNull{kotlin.math.abs(it.lower-30)+
+                    kotlin.math.abs(it.upper-30)}
             val physicalSize=info.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
             val focalLengths=info.get(
                 CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
@@ -268,7 +291,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                     JSONArray().put(it.width).put(it.height)
                 })
                 .put("focal_lengths_mm",PhotoSessionStore.floats(focalLengths))
-                .put("motion_frame_width",320).put("motion_frame_height",240)
+                .put("motion_frame_width",640).put("motion_frame_height",480)
+                .put("requested_camera_fps_range",fpsRange?.toString())
                 .put("motion_image_size_source","Camera2 YUV 640x480")
                 .put("motion_crop_mapping","approximate; field calibration required")
                 .put("camera_timestamp_source",if(realtime)"REALTIME" else "UNKNOWN")
@@ -287,7 +311,7 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                 },handler)
             }
             analysisReader=ImageReader.newInstance(640,480,
-                ImageFormat.YUV_420_888,2).also{reader->
+                ImageFormat.YUV_420_888,3).also{reader->
                 reader.setOnImageAvailableListener({r->
                     val img=r.acquireLatestImage()?:return@setOnImageAvailableListener
                     img.use{analyze(it)}
@@ -331,8 +355,22 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
                                 CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                             set(CaptureRequest.CONTROL_AE_MODE,
                                 CaptureRequest.CONTROL_AE_MODE_ON)
+                            fpsRange?.let {
+                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,it)
+                            }
                         }
-                        s.setRepeatingRequest(request.build(),null,handler)
+                        s.setRepeatingRequest(request.build(),
+                            object:CameraCaptureSession.CaptureCallback(){
+                                override fun onCaptureCompleted(
+                                    session:CameraCaptureSession,
+                                    request:CaptureRequest,
+                                    result:TotalCaptureResult) {
+                                    if(!closing) {
+                                        try{cameraTimingRecorder?.append(result)}
+                                        catch(_:Exception){}
+                                    }
+                                }
+                            },handler)
                         report("Bereit · Auslösen oder Auto wählen")
                     }
                     override fun onConfigureFailed(s:CameraCaptureSession){
@@ -347,20 +385,30 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     private fun analyze(image:android.media.Image){
         if(closing||!started)return
         val now=SystemClock.elapsedRealtimeNanos()
-        // Record a real 10Hz camera stream for VIO/VO. Heavy reconstruction
-        // runs AFTER recording, never on the camera callback.
-        if(image.timestamp-lastMotionNs>=95_000_000L){
+        // High-rate grayscale frames for VIO (target 30 Hz, 640x480).
+        // The Camera2 callback only copies the luminance bytes: deflate and
+        // file I/O happen on MotionFrameStore's dedicated bounded worker.
+        if(image.timestamp>0L)health.cameraFrame(image.timestamp)
+        if(lastMotionNs==0L || image.timestamp-lastMotionNs>=30_000_000L){
             lastMotionNs=image.timestamp
             val plane=image.planes[0]
-            val buf=plane.buffer
-            val grayMotion=ByteArray(320*240)
-            for(y in 0 until 240)for(x in 0 until 320){
-                val sy=y*image.height/240
-                val sx=x*image.width/320
-                val pos=sy*plane.rowStride+sx*plane.pixelStride
-                if(pos>=0&&pos<buf.limit())grayMotion[y*320+x]=buf.get(pos)
+            val src=plane.buffer.duplicate()
+            val width=image.width;val height=image.height
+            val grayMotion=ByteArray(width*height)
+            if(plane.pixelStride==1){
+                for(y in 0 until height){
+                    val offset=y*plane.rowStride
+                    if(offset+width>src.limit())break
+                    src.position(offset)
+                    src.get(grayMotion,y*width,width)
+                }
+            }else{
+                for(y in 0 until height)for(x in 0 until width){
+                    val p=y*plane.rowStride+x*plane.pixelStride
+                    if(p<src.limit())grayMotion[y*width+x]=src.get(p)
+                }
             }
-            motionRecorder?.offer(image.timestamp,grayMotion,320,240)
+            motionRecorder?.offer(image.timestamp,grayMotion,width,height)
         }
         if(now-lastAnalysisNs<330_000_000L)return
         lastAnalysisNs=now
@@ -387,8 +435,12 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
             overlap!=null&&overlap.medianMotionPx<3f -> "Seitwärts bewegen"
             else -> "Bildqualität gut"
         }
+        val rate=health.report()
         report(quality+" · "+frame.features.size+" Merkmale"+
-            (overlap?.let{" · "+it.count+" Matches"}?:""))
+            (overlap?.let{" · "+it.count+" Matches"}?:"")+
+            "\nCAM "+rate.cameraHz.toInt()+" Hz · IMU "+
+            rate.gyroHz.toInt()+" Hz · Lücken "+rate.frameGaps+
+            " · Puffer-Drops "+(motionRecorder?.dropped?:0))
         if(auto&&suitable&&!inFlight&&now-lastShotNs>1_800_000_000L)
             takePhoto(false)
     }
@@ -499,7 +551,7 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         return (sensorOrientation-degrees+360)%360
     }
     override fun onSensorChanged(event:SensorEvent){
-        if(event.values.size<3)return
+        if(closing || event.values.size<3)return
         val v=event.values
         val kind=when(event.sensor.type){
             Sensor.TYPE_GYROSCOPE->"gyro"
@@ -508,7 +560,10 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
             Sensor.TYPE_ACCELEROMETER_UNCALIBRATED->"accelerometer_uncalibrated"
             else->return
         }
-        if(kind=="gyro")angular=sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
+        if(kind=="gyro"){
+            angular=sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
+            health.gyroscope(event.timestamp)
+        }
         try{imuRecorder?.append(event)}catch(_:Exception){}
         synchronized(imuLock){
             imu.addLast(Sample(event.timestamp,kind,v[0],v[1],v[2]))
