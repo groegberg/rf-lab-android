@@ -1,3 +1,19 @@
+# RF Lab v0.7.0-dev — Fully on-device RGB-D textured surfaces
+
+**New development milestone:** calibrated RGB-D keyframes with real JPEG
+camera images, raw/interpolated depth and per-frame pose; conservative
+depth triangulation; a GL ES camera-textured mesh viewer; and user-initiated
+offline ZIP export of original data.
+
+This is **not yet global TSDF fusion, pose optimisation, neural depth
+or Gaussian Splatting**. The new viewer shows individual, possibly
+overlapping frame-mesh patches rather than a globally accurate
+watertight room model. RF/Smart Home features from v0.6 stay available.
+
+[Read Pixel 10 Pro XL test instructions and limitations](docs/MOBILE_SURFACE_V070.md)
+
+---
+
 # RF Lab RGB-D Scanner v0.6.0-dev (development branch)
 
 **First fully on-device development milestone:** denser ARCore Raw + Full
