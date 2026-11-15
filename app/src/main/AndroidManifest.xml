@@ -12,7 +12,8 @@
     <application android:label="RF Lab" android:allowBackup="false" android:theme="@style/Theme.RFLab">
         <meta-data android:name="com.google.ar.core" android:value="optional"/>
         <activity android:name=".DiagnosticsActivity" android:exported="false"/>
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="false"/>
+        <activity android:name=".SpatialHomeActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
