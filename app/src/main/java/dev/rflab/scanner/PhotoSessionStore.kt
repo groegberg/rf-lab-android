@@ -108,6 +108,21 @@ internal class PhotoSessionStore(context: Context) {
                 zip.closeEntry()
             }
             entry(File(session,"session.json"))
+            File(session,"camera.json").takeIf { it.isFile }?.let{entry(it)}
+            // Actual 10Hz camera frames are required for offline odometry.
+            MotionFrameStore.files(session).forEach { entry(it) }
+            // Offline pose and relative DA3 maps remain private exports.
+            session.listFiles()?.filter{
+                it.isDirectory && it.name.startsWith("offline_")
+            }?.sortedBy{it.name}?.forEach{folder->
+                folder.listFiles()?.filter{it.isFile}?.forEach{file->
+                    zip.putNextEntry(ZipEntry(folder.name+"/"+file.name))
+                    file.inputStream().buffered().use{
+                        it.copyTo(zip,64*1024)
+                    }
+                    zip.closeEntry()
+                }
+            }
             // Continuous gyro/accelerometer streams are required for VIO.
             session.listFiles()?.filter {
                 it.isFile && it.name.startsWith("imu_") &&
