@@ -16,8 +16,8 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 18
-        versionName = "1.0.1-dev"
+        versionCode = 19
+        versionName = "1.1.0-dev"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -37,6 +37,7 @@ kotlin {
 
 dependencies {
     implementation("com.google.ar:core:1.57.0")
+    implementation("org.opencv:opencv:4.14.0")
     implementation("com.google.ai.edge.litert:litert:2.3.0")
     implementation("com.google.ai.edge.litert:litert-gpu:2.3.0")
     testImplementation("junit:junit:4.13.2")
