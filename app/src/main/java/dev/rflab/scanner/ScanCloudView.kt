@@ -210,8 +210,8 @@ class ScanCloudView(context: Context) : View(context) {
                 val dy = event.y - lastY
                 if (kotlin.math.abs(dx) > density || kotlin.math.abs(dy) > density) moved = true
                 if (!topDown && event.pointerCount == 1 && !scaler.isInProgress) {
-                    yaw += dx / max(1f, width) * 4.2f
-                    elevation = (elevation + dy / max(1f, height) * 2.0f)
+                    yaw += dx / max(1f, width.toFloat()) * 4.2f
+                    elevation = (elevation + dy / max(1f, height.toFloat()) * 2.0f)
                         .coerceIn(.1f, 1.52f)
                     invalidate()
                 }
