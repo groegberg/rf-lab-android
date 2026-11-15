@@ -399,8 +399,7 @@ class SpatialHomeActivity : Activity() {
                     if (device.bssid.isNotBlank()) " · " + device.bssid.takeLast(8) else "",
                     12.6f, white, true), 12)
                 if (device.type == "Access Point") add(item,
-                    action("WLAN-BSSID zuordnen", { chooseAccessPointBssid(device) }),
-                    marginTop = 7)
+                    action("WLAN-BSSID zuordnen") { chooseAccessPointBssid(device) }, 7)
                 add(item, actions(
                     action("Auf Karte setzen") {
                         placingDeviceId = device.id
