@@ -174,7 +174,7 @@ class SpatialHomeActivity : Activity() {
             text = name
             isAllCaps = false
             textSize = 12f
-            setTextColor(if (primary) background else white)
+            setTextColor(if (primary) this@SpatialHomeActivity.background else white)
             background = panel(if (primary) cyan else detailColor, 10)
             minHeight = dp(45)
             setPadding(dp(12), dp(8), dp(12), dp(8))
