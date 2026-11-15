@@ -267,6 +267,7 @@ class MainActivity : Activity(), SensorEventListener {
         root.setBackgroundColor(background)
         root.setPadding(dp(13), dp(7), dp(13), dp(8))
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
 
         val heading = stack()
         heading.setPadding(dp(5), dp(5), dp(5), dp(6))
