@@ -1,3 +1,24 @@
+# RF Lab v1.1.0-dev — Offline optical/gyro odometry + Depth Anything 3
+
+**New on-device post-processing:** a 10 Hz Camera2 tracking stream is
+recorded alongside your manual/automatic original photos and full-rate
+IMU samples. After scanning, open **Fotos → Offline: Optische Posen +
+Depth Anything 3**. RF Lab now executes actual OpenCV ORB/E-matrix/RANSAC
+relative camera pose recovery with conditional calibrated gyro rotation
+priors, then batch-runs the bundled DA3 Small model on the selected photos.
+Camera timestamps link the depth maps to the relative trajectories.
+All files can be exported in the private capture ZIP.
+
+**Important:** two-view translation and single-view DA3 have unknown
+metric scales. This is an experimental offline visual/gyro odometry
+prototype, **not** already a calibrated full visual-inertial SLAM,
+loop-closed metric room scan or fused 3D mesh. Bundle adjustment,
+relocalization, true metric scaling and surface fusion remain next.
+
+[Architecture and Pixel field tests](docs/OFFLINE_VIO_DA3_V110.md)
+
+---
+
 # RF Lab v1.0.0-dev — Controlled Camera2 photo capture for future visual-inertial SLAM
 
 **New default scan acquisition:** independent Camera2 JPEG camera preview
