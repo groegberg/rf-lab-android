@@ -95,6 +95,7 @@ class SpatialSetupActivity : Activity() {
             setPadding(dp(12), dp(12), dp(12), dp(7))
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         add(root, label("RF LAB  /  SPATIAL HOME", 20f, ink, true), bottom = 3)
         // Compact header: spatial map and scan get the screen, not explanations.
         val scroller = HorizontalScrollView(this).apply {
