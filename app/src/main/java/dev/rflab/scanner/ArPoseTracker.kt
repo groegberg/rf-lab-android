@@ -256,7 +256,7 @@ class ArPoseTracker(
             val now = SystemClock.elapsedRealtimeNanos()
             val camera = frame.camera
             if (sweepRunning) recordSweepFrame(frame.timestamp, camera.trackingState, now, camera.imageIntrinsics)
-            if (depthAvailable && !sweepRunning &&
+            if ((depthAvailable || keyframeObserver != null) && !sweepRunning &&
                 camera.trackingState == TrackingState.TRACKING &&
                 now - lastDepthNs > 250_000_000L) {
                 lastDepthNs = now
