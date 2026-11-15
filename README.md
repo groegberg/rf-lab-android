@@ -1,3 +1,21 @@
+# RF Lab v0.8.0-dev — Clean scanner + cross-view geometry checks
+
+The new **camera-first** room scanner gives the live view and spatial map
+almost the whole screen, with a small status overlay, two primary actions,
+an optional 3D mesh button and diagnostics in the overflow menu.
+
+**Geometry:** more than ARCore-only smoothing: independent reprojection
+checks against nearby RGB-D keyframes, robust structural wall/floor plane
+fits from high-confidence raw depth and conservative planar regularization.
+The default ARCore camera is preferred over automatic ultrawide selection.
+
+Still experimental: it is **not** an accurate TSDF/AI or Gaussian-Splatting
+model yet. Compare measured dimensions before using for room automation.
+
+[Implementation, limitations and Pixel 10 Pro XL field tests](docs/MOBILE_QUALITY_UI_V080.md)
+
+---
+
 # RF Lab v0.7.0-dev — Fully on-device RGB-D textured surfaces
 
 **New development milestone:** calibrated RGB-D keyframes with real JPEG
