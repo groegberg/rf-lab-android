@@ -60,6 +60,7 @@ class PhotoReviewActivity:Activity(){
             setPadding(dp(8),dp(7),dp(8),dp(7))
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         val header=LinearLayout(this).apply{
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
         }
