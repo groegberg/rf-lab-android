@@ -173,10 +173,18 @@ class SpatialSetupActivity : Activity() {
 
     private fun scanStep() {
         add(body, label("Deine Wohnung in 3D", 22f, ink, true), bottom = 8)
-        add(body, button(if (scan.hasScan()) "●  Scan fortsetzen"
-            else "●  Kamera öffnen", true) {
-            startActivityForResult(Intent(this, SpatialScanActivity::class.java), scanRequest)
+        add(body, button("●  Fotos aufnehmen · Camera2", true) {
+            startActivity(Intent(this, PhotoCaptureActivity::class.java))
         }, bottom = 8)
+        add(body, row(
+            button("Foto-Galerie / KI-Tiefe") {
+                startActivity(Intent(this, PhotoGalleryActivity::class.java))
+            },
+            button("ARCore-Scan (alt)") {
+                startActivityForResult(Intent(this, SpatialScanActivity::class.java),
+                    scanRequest)
+            }
+        ), bottom = 8)
         val frames = RgbdKeyframeArchive(this).let {
             val count = it.files().size
             it.shutdown()
