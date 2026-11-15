@@ -1,3 +1,9 @@
+import java.io.File
+import java.net.URL
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -38,9 +44,9 @@ val prepareDa3Model = tasks.register("prepareDa3Model") {
     doLast {
         val size = 55_035_456L
         val sha = "e170369a72ba1bba7486a4d2de555639fccd0595a9bb5b5349f7733ed4aebd1f"
-        fun verified(f: java.io.File): Boolean {
+        fun verified(f: File): Boolean {
             if (!f.isFile || f.length() != size) return false
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val digest = MessageDigest.getInstance("SHA-256")
             f.inputStream().buffered().use { input ->
                 val buf = ByteArray(128 * 1024)
                 while (true) {
@@ -57,7 +63,7 @@ val prepareDa3Model = tasks.register("prepareDa3Model") {
             temp.delete()
             val pinned = "https://huggingface.co/litert-community/Depth-Anything-3-Small-LiteRT/resolve/" +
                 "1ebd31737fcb7842d61ad22722b59cd8053829f2/da3_small_gpu_fp16.tflite"
-            val connection = java.net.URL(pinned).openConnection()
+            val connection = URL(pinned).openConnection()
             connection.connectTimeout = 35_000
             connection.readTimeout = 120_000
             try {
@@ -65,8 +71,8 @@ val prepareDa3Model = tasks.register("prepareDa3Model") {
                     temp.outputStream().buffered().use { output -> input.copyTo(output) }
                 }
                 check(verified(temp)) { "DA3 model SHA256/size check failed" }
-                java.nio.file.Files.move(temp.toPath(), da3Model.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                Files.move(temp.toPath(), da3Model.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING)
             } finally {
                 temp.delete()
             }
