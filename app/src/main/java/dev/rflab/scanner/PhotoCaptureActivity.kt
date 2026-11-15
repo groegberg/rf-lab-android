@@ -93,6 +93,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     private val imuLock=Any()
     private val imu=ArrayDeque<Sample>(360)
     private var imuRecorder: ImuStreamRecorder?=null
+    private var motionRecorder: MotionFrameStore?=null
+    private var lastMotionNs=0L
 
     private fun dp(n:Int)=(n*resources.displayMetrics.density+.5f).toInt()
     private fun bg(color:Int)=GradientDrawable().apply {
@@ -178,6 +180,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         jpegQueue.clear(); metadataQueue.clear()
         lastAnalysisNs=0L
         imuRecorder=ImuStreamRecorder(directory)
+        motionRecorder=MotionFrameStore(directory)
+        lastMotionNs=0L
         thread=HandlerThread("RFPhotoCamera2").also{it.start()}
         handler=Handler(thread!!.looper)
         listOf(Sensor.TYPE_GYROSCOPE,Sensor.TYPE_ACCELEROMETER,
@@ -194,6 +198,8 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
         sensors.unregisterListener(this)
         try { imuRecorder?.close() } catch (_:Exception) {}
         imuRecorder=null
+        try { motionRecorder?.close() } catch (_:Exception) {}
+        motionRecorder=null
         started=false
         try{session?.close()}catch(_:Exception){}
         try{camera?.close()}catch(_:Exception){}
@@ -238,6 +244,28 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
             intrinsics=info.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
             distortion=info.get(CameraCharacteristics.LENS_DISTORTION)
             crop=info.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+            val physicalSize=info.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            val focalLengths=info.get(
+                CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            val cameraMetadata=JSONObject()
+                .put("schema","rflab-camera2-calibration-v1")
+                .put("device_id",deviceId)
+                .put("lens_intrinsics_active_array_px",
+                    PhotoSessionStore.floats(intrinsics))
+                .put("distortion",PhotoSessionStore.floats(distortion))
+                .put("active_array",crop?.let {
+                    JSONArray().put(it.left).put(it.top).put(it.right).put(it.bottom)
+                })
+                .put("sensor_physical_size_mm",physicalSize?.let{
+                    JSONArray().put(it.width).put(it.height)
+                })
+                .put("focal_lengths_mm",PhotoSessionStore.floats(focalLengths))
+                .put("motion_frame_width",320).put("motion_frame_height",240)
+                .put("motion_image_size_source","Camera2 YUV 640x480")
+                .put("motion_crop_mapping","approximate; field calibration required")
+                .put("camera_timestamp_source",if(realtime)"REALTIME" else "UNKNOWN")
+                .put("poses","not recorded; estimated offline")
+            File(directory,"camera.json").writeText(cameraMetadata.toString(2))
             photoReader=ImageReader.newInstance(photoWidth,photoHeight,
                 ImageFormat.JPEG,3).also{reader->
                 reader.setOnImageAvailableListener({r->
@@ -311,6 +339,21 @@ class PhotoCaptureActivity : Activity(), TextureView.SurfaceTextureListener,
     private fun analyze(image:android.media.Image){
         if(closing||!started)return
         val now=SystemClock.elapsedRealtimeNanos()
+        // Record a real 10Hz camera stream for VIO/VO. Heavy reconstruction
+        // runs AFTER recording, never on the camera callback.
+        if(image.timestamp-lastMotionNs>=95_000_000L){
+            lastMotionNs=image.timestamp
+            val plane=image.planes[0]
+            val buf=plane.buffer
+            val grayMotion=ByteArray(320*240)
+            for(y in 0 until 240)for(x in 0 until 320){
+                val sy=y*image.height/240
+                val sx=x*image.width/320
+                val pos=sy*plane.rowStride+sx*plane.pixelStride
+                if(pos>=0&&pos<buf.limit())grayMotion[y*320+x]=buf.get(pos)
+            }
+            motionRecorder?.offer(image.timestamp,grayMotion,320,240)
+        }
         if(now-lastAnalysisNs<330_000_000L)return
         lastAnalysisNs=now
         val plane=image.planes[0]
