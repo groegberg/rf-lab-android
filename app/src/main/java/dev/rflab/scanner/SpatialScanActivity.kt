@@ -31,6 +31,8 @@ class SpatialScanActivity : Activity() {
     private lateinit var store: SessionStore
     private lateinit var ar: ArPoseTracker
     private lateinit var cloud: ScanCloudView
+    private lateinit var archive: RgbdKeyframeArchive
+    private lateinit var surfaceButton: Button
     private lateinit var stats: TextView
     private lateinit var guidance: TextView
     private lateinit var start: Button
@@ -55,10 +57,12 @@ class SpatialScanActivity : Activity() {
         window.navigationBarColor = Color.rgb(10, 21, 34)
         scan = RoomScanStore(this)
         store = SessionStore(this)
+        archive = RgbdKeyframeArchive(this)
         ar = ArPoseTracker(this, this, store,
             { message -> runOnUiThread { lastMessage = message; refresh() } },
             { pose, _ -> scan.addPose(pose) },
-            { points, _ -> scan.addDepth(points) }
+            { points, _ -> scan.addDepth(points) },
+            { frame -> archive.submit(frame) }
         )
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -102,8 +106,18 @@ class SpatialScanActivity : Activity() {
             }
         }
         stack.addView(colors, LinearLayout.LayoutParams(-1, dp(48)))
+        surfaceButton = Button(this).apply {
+            isAllCaps = false
+            text = "Kameratexturiertes 3D-Mesh ansehen"
+            setOnClickListener {
+                if (active) stopCapture(true)
+                startActivity(Intent(this@SpatialScanActivity,
+                    RgbdSurfaceViewerActivity::class.java))
+            }
+        }
+        stack.addView(surfaceButton, LinearLayout.LayoutParams(-1, dp(52)))
         stats = text("", 12f, Color.WHITE)
-        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(88)))
+        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(112)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         start = Button(this).apply {
             isAllCaps = false
@@ -150,14 +164,16 @@ class SpatialScanActivity : Activity() {
         val latest = ar.latestRgbdStats
         stats.text = String.format(Locale.GERMAN,
             "Posen %d · Punkte %d (RGB %d / Raw %d) · Frames %d\n" +
-            "Letzter Frame: Raw %d · Full %d · RGB %d\n%s",
+            "Raw %d · Full %d · RGB %d · Keyframes %d (+%d, ausgelassen %d)\n%s",
             poses, points, scan.coloredPointCount(), scan.rawPointCount(), sampled,
             latest?.rawCount ?: 0, latest?.fullCount ?: 0,
-            latest?.coloredCount ?: 0, lastMessage)
+            latest?.coloredCount ?: 0, archive.savedCount,
+            archive.pendingCount, archive.droppedCount, lastMessage)
         cloud.invalidate()
         start.text = if (active) "Scan beenden"
             else if (scan.pointCount() > 0) "Neuen Scan starten" else "3D-Scan starten"
         finish.isEnabled = points >= 50 && poses >= 3
+        surfaceButton.isEnabled = archive.savedCount > 0
     }
 
     private fun requestStart() {
@@ -190,6 +206,7 @@ class SpatialScanActivity : Activity() {
     private fun startCapture() {
         if (active) return
         val time = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMAN).format(Date())
+        archive.clearForNewScan()
         scan.start("ARCore-Scan " + time)
         val file = store.start()
         store.write("spatial_optical_scan", JSONObject()
@@ -240,6 +257,11 @@ class SpatialScanActivity : Activity() {
         }
         setResult(RESULT_OK)
         finish()
+    }
+
+    override fun onDestroy() {
+        if (::archive.isInitialized) archive.shutdown()
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(code: Int,
