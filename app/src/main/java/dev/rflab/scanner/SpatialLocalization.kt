@@ -17,7 +17,11 @@ data class RoomEstimate(
 }
 
 class SpatialLocator {
-    fun estimate(home: SpatialHomeStore, scan: RfSweep, nowMs: Long = System.currentTimeMillis()): RoomEstimate {
+    fun estimate(home: SpatialHomeStore, scan: RfSweep, nowMs: Long = System.currentTimeMillis()): RoomEstimate =
+        estimate(home.rooms, home.anchors, scan, nowMs)
+
+    fun estimate(rooms: List<HomeRoom>, anchors: List<HomeAnchor>, scan: RfSweep,
+                 nowMs: Long = System.currentTimeMillis()): RoomEstimate {
         fun unknown(reason: String, all: List<RoomCandidate> = emptyList()) =
             RoomEstimate(null, "Unbekannt", 0.0, scan.atMs, null, 120.0, 0,
                 reason, all)
@@ -25,7 +29,7 @@ class SpatialLocator {
             return unknown("SCAN_VERALTET")
         if (scan.readings.size < 3) return unknown("ZU_WENIGE_APS")
         data class AnchorScore(val anchor: HomeAnchor, val score: Double, val overlap: Int)
-        val evaluated = home.anchors.mapNotNull { anchor ->
+        val evaluated = anchors.mapNotNull { anchor ->
             if (anchor.sweeps.isEmpty()) return@mapNotNull null
             val reference = anchor.median()
             val common = reference.keys.intersect(scan.readings.keys)
@@ -40,7 +44,7 @@ class SpatialLocator {
         if (evaluated.isEmpty()) return unknown("KEINE_GEMEINSAMEN_APS")
         // Every room contributes its closest *measured* reference point.
         val byRoom = evaluated.groupBy { it.anchor.roomId }.mapNotNull { (roomId, scores) ->
-            val room = home.room(roomId) ?: return@mapNotNull null
+            val room = rooms.firstOrNull { it.id == roomId } ?: return@mapNotNull null
             Triple(room, scores.minBy { it.score }, scores.size)
         }.sortedBy { it.second.score }
         val best = byRoom.firstOrNull() ?: return unknown("KEINE_REFERENZEN")
@@ -51,7 +55,7 @@ class SpatialLocator {
                 if (total > 0) weights[index] / total else 0.0,
                 match.score, match.overlap)
         }
-        val distinctRoomsWithTrainedPoints = home.anchors.filter { it.sweeps.isNotEmpty() }
+        val distinctRoomsWithTrainedPoints = anchors.filter { it.sweeps.isNotEmpty() }
             .map { it.roomId }.distinct().size
         val score = best.second.score
         val margin = if (byRoom.size >= 2)
