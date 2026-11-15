@@ -52,6 +52,7 @@ class PhotoGalleryActivity: Activity() {
             setPadding(dp(10),dp(7),dp(10),0)
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         val top=LinearLayout(this).apply{
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
         }
