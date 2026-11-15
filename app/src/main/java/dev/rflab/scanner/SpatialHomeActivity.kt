@@ -253,6 +253,8 @@ class SpatialHomeActivity : Activity() {
             activeRoomId = selectedRoomId
             activeAnchorId = selectedAnchorId
             estimate = lastEstimate
+            locationHint = SpatialProximity().hint(
+                this@SpatialHomeActivity.home, lastEstimate, lastSweep)
             onTap = tap
         }
         add(content, view, 5, 10, height = dp(height))
@@ -312,6 +314,26 @@ class SpatialHomeActivity : Activity() {
                 " dB · " + it.overlap + " gemeinsame BSSIDs", 12f), 7)
         }
         add(content, probs, bottom = 12)
+        val proximity = card("NÄCHSTE GERÄTE · EXPERIMENTELL",
+            "RSSI-basierte Näherung. Kein exakter Abstand, keine Gerätesteuerung.")
+        val h = SpatialProximity().hint(home, lastEstimate, lastSweep)
+        if (h == null) {
+            add(proximity, text("Mindestens drei räumlich verteilte Messpunkte " +
+                "im sicher erkannten Raum erforderlich.", 12f, quiet), 7)
+        } else {
+            add(proximity, text(String.format(Locale.GERMAN,
+                "Position ca. %.1f / %.1f m · Unsicherheitsradius mindestens %.1f m",
+                h.x, h.z, h.uncertaintyM), 12f), 7)
+            val nearby = SpatialProximity().nearby(home, lastEstimate, h)
+            if (nearby.isEmpty()) add(proximity, text("Keine Geräte in diesem Raum verortet."))
+            nearby.take(8).forEach { d ->
+                add(proximity, text(d.device.name + " · " +
+                    String.format(Locale.GERMAN, "%.1f–%.1f m", d.lowerM, d.upperM) +
+                    " · " + d.kind, 12f,
+                    if (d.kind.startsWith("NAHE")) green else quiet), 8)
+            }
+        }
+        add(content, proximity, bottom = 12)
         note("Die Prozentwerte sind vorläufige, nicht statistisch kalibrierte Modellgewichte. " +
             "Die Markierung zeigt den ähnlichsten Messpunkt, keine genaue Distanz. " +
             "Ortung funktioniert derzeit nur, während die App sichtbar ist.")
