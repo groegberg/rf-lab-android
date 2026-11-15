@@ -71,6 +71,15 @@ jobs:
           c = c[:a] + "# arm64 NEON is available without -mfpu.\n\n" + c[b:]
           cmake.write_text(c)
           PY
+      - name: Bundle calibration templates and apply Pixel-specific research patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p openvins-mobile/app/src/main/assets/vio_config
+          cp openvins-mobile/app_device/config/*.yaml openvins-mobile/app/src/main/assets/vio_config/
+          python3 research/openvins_pixel_test_patch.py openvins-mobile
+          grep -q 'Scoped storage' openvins-mobile/app/src/main/java/com/openvins/android/MainActivity.kt
+          grep -q 'OpenVINS TEST' openvins-mobile/app/src/main/res/layout/activity_main.xml
       - name: Build real OpenVINS Mobile VIO demo for ARM64
         working-directory: openvins-mobile
         shell: bash
@@ -90,10 +99,11 @@ jobs:
       - name: Upload separate GPLv3 research APK and notices
         uses: actions/upload-artifact@v4
         with:
-          name: OpenVINS-Mobile-GPLv3-ARM64-Research
+          name: OpenVINS-Mobile-Pixel-Research-APK
           path: |
             openvins-mobile/app/build/outputs/apk/debug/app-debug.apk
             openvins-mobile/LICENSE
             openvins-mobile/ReadMe.md
+            research/openvins_pixel_test_patch.py
           if-no-files-found: error
           retention-days: 14
