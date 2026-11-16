@@ -172,9 +172,37 @@ class SpatialSetupActivity : Activity() {
         add(body, view, 9, 10, dp(height))
     }
 
+    private fun launchOpenVins() {
+        try {
+            // Standalone GPLv3 research app, with its OWN Camera2 stream.
+            // No GPL code is loaded or linked into RF Lab.
+            startActivity(Intent().setClassName(
+                "com.openvins.android","com.openvins.android.MainActivity"))
+        } catch (_: android.content.ActivityNotFoundException) {
+            AlertDialog.Builder(this)
+                .setTitle("Separate VIO-Test-App erforderlich")
+                .setMessage("OpenVINS ist ein eigenständiger, GPLv3-lizenzierter " +
+                    "Android-Forschungsprototyp. Bitte erst die OpenVINS-APK " +
+                    "installieren. Danach kannst du hier das Live-Tracking " +
+                    "starten und den Datensatz über die Galerie in RF Lab " +
+                    "importieren. Die Kamera-/IMU-Kalibrierung ist noch " +
+                    "nicht für dein Pixel validiert.")
+                .setNegativeButton("Abbrechen",null)
+                .setPositiveButton("Download öffnen") { _, _ ->
+                    startActivity(Intent(Intent.ACTION_VIEW,
+                        android.net.Uri.parse(
+                            "https://github.com/groegberg/rf-lab-android/" +
+                            "releases/tag/openvins-pixel-v0.2-research")))
+                }.show()
+        }
+    }
+
     private fun scanStep() {
         add(body, label("Deine Wohnung in 3D", 22f, ink, true), bottom = 8)
-        add(body, button("●  Fotos aufnehmen · Camera2", true) {
+        add(body, button("●  Live VIO testen · OpenVINS", true) {
+            launchOpenVins()
+        }, bottom = 8)
+        add(body, button("Fotos aufnehmen · Camera2 (bisher)") {
             startActivity(Intent(this, PhotoCaptureActivity::class.java))
         }, bottom = 8)
         add(body, row(
