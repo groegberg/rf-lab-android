@@ -127,6 +127,16 @@ edit(cpp,
                      << "," << q_cam(1) << "," << q_cam(2) << "\\n";
           }
         }""")
+# The upstream getter can otherwise return uninitialized state vectors,
+# making the live HUD falsely claim VIO is running before MSCKF convergence.
+edit(cpp,
+    """  if (sys == nullptr || !is_running_ov) {
+    return JNI_FALSE;
+  }""",
+    """  if (sys == nullptr || !is_running_ov || !sys->initialized()) {
+    return JNI_FALSE;
+  }""")
+
 # The pose writer is nested under the existing trajectory mutex. There is
 # no lock inversion: the record toggle takes only the pose writer mutex.
 main="app/src/main/java/com/openvins/android/MainActivity.kt"
