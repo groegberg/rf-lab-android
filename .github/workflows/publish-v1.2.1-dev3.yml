@@ -1,0 +1,72 @@
+name: Publish RF Lab v1.2.1-dev.3 OpenVINS diagnostics APK
+
+on:
+  push:
+    branches: [experiment/openvins-live-vio-v1.2]
+    paths:
+      - .github/workflows/publish-v1.2.1-dev3.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-verified-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require successful Android tests and build for exact diagnostics commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=43818292485
+          expected=8ecdc6102038219c41d2bf4eb7eaad0d9a802f62
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .head_sha)"
+          test "$actual" = "$expected" || { echo "Mismatched source SHA"; exit 1; }
+          for i in $(seq 1 120); do
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .status)"
+            if [ "$status" = completed ]; then
+              conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .conclusion)"
+              test "$conclusion" = success || {
+                echo "Android tests/build failed: $conclusion"; exit 1;
+              }
+              break
+            fi
+            if [ "$i" = 120 ]; then
+              echo "Verified build did not complete"; exit 1
+            fi
+            sleep 10
+          done
+      - name: Download exact tested APK artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download 43818292485 --repo "$GITHUB_REPOSITORY" \
+            --name RF-Lab-Pixel10-Debug-APK --dir ./verified_artifact
+          mapfile -t apks < <(find verified_artifact -type f -name app-debug.apk)
+          test "${#apks[@]}" = 1
+          test -s "${apks[0]}"
+          cp "${apks[0]}" RF-Lab-v1.2.1-dev.3.apk
+          sha256sum RF-Lab-v1.2.1-dev.3.apk
+      - name: Publish direct APK with explicit non-metric status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.2.1-dev.3
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Immutable prerelease already exists."
+            exit 0
+          fi
+          gh release create "$tag" RF-Lab-v1.2.1-dev.3.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 8ecdc6102038219c41d2bf4eb7eaad0d9a802f62 \
+            --prerelease \
+            --title "RF Lab v1.2.1-dev.3 — OpenVINS recording quality diagnostics" \
+            --notes "Adds native OpenVINS pose/RGB synchronization coverage, measured VIO pose rate and gaps, local offline capture_diagnostics JSON, and warnings for unmatched camera timestamps. Keeps standalone GPLv3 OpenVINS v0.4 research capture, RF Lab import, local DA3, and ARCore legacy comparison. Separate OpenVINS research APK must also be installed. No verified Pixel IMU/camera calibration, true loop closure, metric mesh or on-device unified VIO engine yet. Back up RF Lab measurements before replacing debug APK."
