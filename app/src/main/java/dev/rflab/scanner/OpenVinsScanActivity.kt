@@ -37,6 +37,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private val background = Color.rgb(9, 18, 30)
     private val accent = Color.rgb(95, 222, 209)
     private lateinit var scan: RoomScanStore
+    private lateinit var sessionEvents: SessionStore
     private lateinit var cloud: ScanCloudView
     private lateinit var stateLabel: TextView
     private lateinit var detailLabel: TextView
@@ -79,6 +80,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         scan = RoomScanStore(this, "rflab_openvins_scan_v1.json")
+        sessionEvents = SessionStore(this)
 
         // Preserve OpenVINS's live Camera2ResView and JNI camera frame stream.
         // Reparent its EXISTING view: never open a second camera or IMU source.
@@ -213,6 +215,13 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                 return
             }
             recording = true
+            sessionEvents.start()
+            sessionEvents.write("spatial_optical_scan", JSONObject()
+                .put("format", "OpenVINS native MSCKF RGB+IMU+poses")
+                .put("backend", "OpenVINS")
+                .put("coordinate_frame", "one separate native Z-up session")
+                .put("metric_calibration_validated", false)
+                .put("arcore_frame_registered", false))
             startButton.text = "■ Scan stoppen"
             stateLabel.text = "○ Initialisierung · langsam seitwärts bewegen"
             detailLabel.text = "Kamera + IMU laufen · RGB-Frames und native " +
@@ -240,6 +249,16 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         val now = SystemClock.elapsedRealtimeNanos()
         if (now - lastUiNs > 250_000_000L) {
             lastUiNs = now
+            sessionEvents.write("vio_camera_pose", JSONObject()
+                .put("state", "TRACKING")
+                .put("position_y_up_unvalidated", JSONArray()
+                    .put(mapped[0].toDouble())
+                    .put(mapped[1].toDouble())
+                    .put(mapped[2].toDouble()))
+                .put("quaternion_native_wxyz", JSONArray()
+                    .put(quaternion[0]).put(quaternion[1])
+                    .put(quaternion[2]).put(quaternion[3]))
+                .put("timestamp_type", "RF Lab callback elapsedRealtimeNanos"))
             stateLabel.text = "● Native VIO-Pose · " +
                 scan.poseCount() + " Kamerapunkte"
             detailLabel.text = String.format(Locale.GERMANY,
@@ -268,6 +287,11 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         try {
             stopEmbeddedScan()
             scan.save()
+            sessionEvents.write("spatial_optical_scan_end", JSONObject()
+                .put("backend", "OpenVINS")
+                .put("native_camera_poses", scan.poseCount())
+                .put("native_pose_initialized", nativePoseSeen))
+            sessionEvents.stop()
             startButton.text = "● Neuer Scan"
             stateLabel.text = if (nativePoseSeen)
                 "✓ Aufnahme gesichert · " + scan.poseCount() + " VIO-Positionen"
