@@ -63,6 +63,10 @@ def main() -> None:
     # initialized MSCKF poses via callbacks without a second camera pipeline.
     run(sys.executable, str(PROJECT / "tools" / "patch_embedded_openvins_scan.py"),
         str(SOURCE))
+    # Static VIO needs an initial stationary IMU window; expose *actual*
+    # native camera/IMU/worker counters and enable stationary ZUPT startup.
+    run(sys.executable, str(PROJECT / "tools" /
+        "patch_openvins_initialization_diagnostics.py"), str(SOURCE))
 
     cmake = SOURCE / "app" / "src" / "main" / "cpp" / "CMakeLists.txt"
     c = cmake.read_text(encoding="utf-8")
