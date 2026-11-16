@@ -1,0 +1,60 @@
+name: Publish RF Lab v1.3.2 OpenVINS initialization diagnostics private APK
+
+on:
+  push:
+    branches: [feature/embedded-openvins-v1.3]
+    paths:
+      - .github/workflows/publish-v1.3.2-openvins-init-test.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  private-verified-init-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned RF Lab v1.3.2 Android build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=43968615617
+          expected_commit=fdc804d15bf183b974c09a5717815ea6f122fd26
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .head_sha)"
+          conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .conclusion)"
+          test "$sha" = "$expected_commit" || { echo "Wrong APK source commit"; exit 1; }
+          test "$conclusion" = success || { echo "Native Android APK CI not successful"; exit 1; }
+      - name: Retrieve EXACT 16 KiB verified APK and check SHA256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download 43968615617 --repo "$GITHUB_REPOSITORY" \
+            --name RF-Lab-Pixel10-Debug-APK --dir verified
+          mapfile -t apks < <(find verified -type f -name app-debug.apk)
+          test "${#apks[@]}" = 1
+          cp "${apks[0]}" RF-Lab-v1.3.2-OpenVINS-Init-Diagnostics-Pixel-Test.apk
+          echo "1180162b6fcfa4a043db34b8abeb2a60755567205be46fb8ffd0c9d11a41876c  RF-Lab-v1.3.2-OpenVINS-Init-Diagnostics-Pixel-Test.apk" | sha256sum -c -
+          test "$(stat -c %s RF-Lab-v1.3.2-OpenVINS-Init-Diagnostics-Pixel-Test.apk)" -gt 80000000
+      - name: Publish authorized private Pixel diagnostic test release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.3.2-openvins-init-private-test.1
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Immutable private test release already exists."
+            exit 0
+          fi
+          gh release create "$tag" RF-Lab-v1.3.2-OpenVINS-Init-Diagnostics-Pixel-Test.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target fdc804d15bf183b974c09a5717815ea6f122fd26 \
+            --prerelease \
+            --title "RF Lab v1.3.2 — OpenVINS real initialization diagnostics (PRIVATE)" \
+            --notes "PRIVATE INTERNAL PIXEL 10 PRO XL TEST. v1.3.1 showed a WRONG RF Lab lower status 'VIO initialisiert' on onNativePoseUnavailable even while the native OpenVINS HUD correctly showed initialization pending. This build replaces that incorrect status with actual native worker counters, real camera/gyro/IMU timestamps, processed-vs-expired camera frame counts and config failures; a button copies the diagnostic report without ADB. Static native MSCKF initialization now uses try_zupt=true to permit stationary initialization, with guidance to keep the device still for 3-5 seconds then move slowly. The native worker now wakes for each queued frame instead of waiting for a 100 ms false predicate. The real JNI pose remains gated on sys->initialized(), no dummy pose/coordinates. Existing app-private estimator_config.yaml is migrated to try_zupt=true without touching camera intrinsics/extrinsics. Full Kotlin/unit and Android APK build passed, all native Boost/OpenCV DT_NEEDED libraries included, 16KiB PT_LOAD and zipalign pass. Pixel camera/IMU intrinsic/extrinsic/time calibration still unvalidated; source-clock mismatches or IMU delivery issues must be confirmed from copied diagnostics. No production tracking accuracy or loop closure claim, no metric DA3 fusion. Back up RF Lab data before update; debug APK signature mismatch may require uninstall. GPLv3 combined code and APK restricted to PRIVATE authorized development until distribution obligations reviewed. Native source SHA fdc804d15bf183b974c09a5717815ea6f122fd26, APK SHA256 1180162b6fcfa4a043db34b8abeb2a60755567205be46fb8ffd0c9d11a41876c."
