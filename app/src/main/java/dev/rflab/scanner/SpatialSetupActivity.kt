@@ -214,6 +214,14 @@ class SpatialSetupActivity : Activity() {
             selectTrackingBackend()
         }, bottom = 6)
         add(body, label(trackingBackend.hint, 12.1f, muted), bottom = 7)
+        val pageSize = runCatching {
+            android.system.Os.sysconf(android.system.OsConstants._SC_PAGE_SIZE)
+        }.getOrDefault(-1L)
+        val pageLabel = if(pageSize > 0) (pageSize/1024).toString()+" KiB"
+            else "unbekannt"
+        add(body, label("Android "+android.os.Build.VERSION.RELEASE+
+            " · API "+android.os.Build.VERSION.SDK_INT+
+            " · Speicherpages "+pageLabel,11.5f,muted), bottom=8)
         add(body, button("●  Tracking starten", true) {
             startSelectedTracking()
         }, bottom = 8)
