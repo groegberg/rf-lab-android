@@ -146,18 +146,16 @@ s=s[:start]+"""        // The folder icon is now a privacy-preserving, one-tap Z
 
 """+s[end:]
 # Replace static title with live status (not a claim of calibrated metric data).
-s=s.replace(
-    """        if (trajectoryView == null) return
-
-        // Get current pose""",
-    """        if (trajectoryView == null) return
+# Upstream contains whitespace on its empty line: patch using a stable
+# nonempty marker and verify the insertion to avoid unresolved HUD variables.
+needle="        if (trajectoryView == null) return"
+assert needle in s
+s=s.replace(needle,needle+"""
         val hud = findViewById<android.widget.TextView>(R.id.vio_health_status)
         if (!isRunningOV) {
             hud.text = "OpenVINS · STOP · Kalibrierung nicht validiert"
             return
-        }
-
-        // Get current pose""")
+        }""",1)
 s=s.replace(
     """        if (!getCurrentPoseJNI(currentPos, currentQuat)) {
             return // System not initialized
