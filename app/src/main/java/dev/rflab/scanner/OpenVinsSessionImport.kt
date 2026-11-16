@@ -5,6 +5,8 @@ import org.json.JSONObject
 import java.io.File
 import java.io.InputStream
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
 
 /**
  * User-selected GPLv3 OpenVINS research archive -> RF Lab's private Camera2
@@ -17,6 +19,63 @@ import java.util.zip.ZipInputStream
 internal class OpenVinsSessionImport(private val context: Context) {
     data class Result(val session:File,val photos:Int,val poses:Int,
                       val calibration:Boolean)
+
+    /**
+     * OpenVINS and RF Lab now use the SAME app-private storage.
+     * Import the latest completed native recording directly, without SAF ZIP.
+     * Retain the native originals and reuse our defensive ZIP importer.
+     */
+    fun importLocalLatest(update: (String) -> Unit = {}): Result {
+        val root = File(context.getExternalFilesDir(null), "sessions")
+        val latest = root.listFiles()?.filter {
+            it.isDirectory && File(it, "vio_camera_trajectory.csv").isFile &&
+                File(it, "rgb").isDirectory
+        }?.maxByOrNull { it.lastModified() }
+            ?: error("Keine interne OpenVINS-Aufnahme. Erst Tracking und Aufnahme stoppen.")
+        return importLocalDirectory(latest, update)
+    }
+
+    fun importLocalDirectory(directory: File,
+                             update: (String) -> Unit = {}): Result {
+        val sessions = File(context.getExternalFilesDir(null), "sessions").canonicalFile
+        val source = directory.canonicalFile
+        require(source.parentFile == sessions && source.isDirectory) {
+            "Quelle liegt nicht im OpenVINS-Sitzungsordner"
+        }
+        val files = ArrayList<File>()
+        fun add(file: File) { if(file.isFile) files.add(file) }
+        add(File(source,"vio_camera_trajectory.csv"))
+        add(File(source,"imu0.csv"))
+        configNames.sorted().forEach { name ->
+            add(File(source,"config/$name"))
+        }
+        val rgb=File(source,"rgb").listFiles()
+            ?.filter { it.isFile && rgbRegex.containsMatchIn("rgb/"+it.name) }
+            ?.sortedBy { it.name }
+            ?.take(180) ?: emptyList()
+        require(rgb.size>=2) { "OpenVINS hat zu wenige Farbbilder gespeichert" }
+        files.addAll(rgb)
+        val size=files.sumOf { it.length() }
+        require(size in 1L..(450L*1024*1024)) {
+            "Aufnahme ist für die lokale Übernahme zu groß"
+        }
+        val temp=File.createTempFile("rflab-vio-", ".zip", context.cacheDir)
+        try {
+            ZipOutputStream(temp.outputStream().buffered()).use { zip ->
+                for(file in files) {
+                    val actual=file.canonicalFile
+                    require(actual.path.startsWith(source.path+File.separator)) {
+                        "Unerlaubter Dateipfad"
+                    }
+                    val rel=file.relativeTo(source).invariantSeparatorsPath
+                    zip.putNextEntry(ZipEntry(source.name+"/"+rel))
+                    file.inputStream().buffered().use { it.copyTo(zip,64*1024) }
+                    zip.closeEntry()
+                }
+            }
+            return temp.inputStream().buffered().use { import(it,update) }
+        }finally { temp.delete() }
+    }
 
     private val rgbRegex=Regex("""(?:^|/)rgb/([0-9]{12,20})\.jpe?g$""",
         RegexOption.IGNORE_CASE)

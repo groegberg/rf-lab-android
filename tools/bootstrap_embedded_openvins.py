@@ -64,7 +64,7 @@ def main() -> None:
     c = cmake.read_text(encoding="utf-8")
     begin = c.index("if(ANDROID_ABI STREQUAL armeabi-v7a)")
     end = c.index("# Include OpenCV project", begin)
-    c = c[:begin] + "# arm64 NEON is intrinsic; never use -mfpu.\\n\\n" + c[end:]
+    c = c[:begin] + "# arm64 NEON is intrinsic; never use -mfpu.\n\n" + c[end:]
     write(cmake, c)
 
     # The host application controls targetSdk and its camera permission.
