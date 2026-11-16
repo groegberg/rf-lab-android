@@ -78,8 +78,10 @@ internal class PhotoSessionStore(context: Context) {
             metadata.put("schema","rflab-camera2-frame-v1")
             metadata.put("file","$name.jpg")
             metadata.put("photo_index",count)
-            metadata.put("pose_source","NONE")
-            metadata.put("image_source","Camera2 native JPEG")
+            if (!metadata.has("pose_source"))
+                metadata.put("pose_source","NONE")
+            if (!metadata.has("image_source"))
+                metadata.put("image_source","Camera2 native JPEG")
             tempPhoto.writeBytes(jpeg)
             tempJson.writeText(metadata.toString(2))
             check(tempPhoto.renameTo(photo)) { "Could not save JPEG" }
@@ -109,6 +111,21 @@ internal class PhotoSessionStore(context: Context) {
             }
             entry(File(session,"session.json"))
             File(session,"camera.json").takeIf { it.isFile }?.let{entry(it)}
+            // Real external OpenVINS MSCKF trajectory and provenance.
+            File(session,"external_vio_trajectory.csv").takeIf {
+                it.isFile
+            }?.let { entry(it) }
+            session.listFiles()?.filter{
+                it.isFile && it.name=="imu_openvins.csv"
+            }?.forEach{entry(it)}
+            File(session,"external_calibration").takeIf{
+                it.isDirectory
+            }?.listFiles()?.filter{it.isFile}?.forEach{file->
+                zip.putNextEntry(ZipEntry(
+                    "external_calibration/"+file.name))
+                file.inputStream().buffered().use{it.copyTo(zip,64*1024)}
+                zip.closeEntry()
+            }
             // Actual 10Hz camera frames are required for offline odometry.
             MotionFrameStore.files(session).forEach { entry(it) }
             // Per-frame sensor shutter, exposure and crop calibration stream.
