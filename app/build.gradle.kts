@@ -42,6 +42,9 @@ dependencies {
     // Share the same OpenCV version and Mat ABI with native OpenVINS.
     implementation(project(":openvins_opencv"))
     implementation(project(":openvins_embed"))
+    // OpenVINS MainActivity is an AppCompatActivity subclass: the host
+    // compiler needs this superclass on its direct Kotlin compile classpath.
+    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.ai.edge.litert:litert:2.3.0")
     implementation("com.google.ai.edge.litert:litert-gpu:2.3.0")
     testImplementation("junit:junit:4.13.2")
