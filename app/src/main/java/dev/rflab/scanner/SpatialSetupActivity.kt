@@ -178,8 +178,10 @@ class SpatialSetupActivity : Activity() {
     }
 
     private fun launchOpenVins() {
-        // Native OpenVINS Activity is part of RF Lab, not an external app.
-        startActivity(Intent(this, com.openvins.android.MainActivity::class.java))
+        // The native engine drives RF Lab's live trajectory/map and owns one
+        // synchronized Camera2+IMU recording; never start a parallel ARCore camera.
+        startActivityForResult(Intent(this, OpenVinsScanActivity::class.java),
+            scanRequest)
     }
 
     private fun startSelectedTracking() {
@@ -228,10 +230,19 @@ class SpatialSetupActivity : Activity() {
         add(body, button("Aufnahmen / KI-Tiefe") {
             startActivity(Intent(this, PhotoGalleryActivity::class.java))
         }, bottom = 8)
-        add(body, label("OpenVINS läuft innerhalb von RF Lab. "+
-            "Aufnahmen können ohne ZIP übernommen werden. "+
-            "Die native VIO-Pose ist noch nicht mit dem ARCore-Raumscan fusioniert.",
+        add(body, label("OpenVINS zeigt jetzt die native Kameratrajektorie "+
+            "live neben der Kamera. Die RGB-/IMU-Aufnahmen gehen direkt zur "+
+            "Offline-Auswertung mit Depth Anything 3. "+
+            "ARCore- und VIO-Koordinaten bleiben getrennt; kein metrischer Mesh-Scan.",
             11.5f, muted), bottom = 8)
+        val nativeTrack = RoomScanStore(this, "rflab_openvins_scan_v1.json")
+        if (nativeTrack.poseCount() > 0) {
+            add(body, label("Letzte OpenVINS-Trajektorie · " +
+                nativeTrack.poseCount() + " native Kamerapositionen",
+                13f, accent, true), bottom = 6)
+            add(body, ScanCloudView(this).apply { store = nativeTrack },
+                bottom = 9, height = dp(255))
+        }
         val frames = RgbdKeyframeArchive(this).let {
             val count = it.files().size
             it.shutdown()
