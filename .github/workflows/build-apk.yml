@@ -54,6 +54,8 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libopencv_java4.so'
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'assets/vio_config/estimator_config.yaml'
           sha256sum app/build/outputs/apk/debug/app-debug.apk
+      - name: Check 16 KiB native ELF alignment (report warnings)
+        run: python3 tools/check_elf_16k.py app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
