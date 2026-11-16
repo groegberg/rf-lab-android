@@ -113,7 +113,7 @@ internal class OfflineVisualOdometry {
         ((r[0]+r[4]+r[8]-1)/2).coerceIn(-1.0,1.0))
 
     fun estimate(dir:File, progress:(String)->Unit = {}):Result {
-        check(OpenCVLoader.initLocal()){"Native OpenCV library unavailable"}
+        check(OpenCVLoader.initDebug()){"Native OpenCV library unavailable"}
         val frames=MotionFrameStore.read(dir,step=3,limit=350)
         require(frames.size>=4){
             "Mindestens einige Sekunden Kamerabildstrom aufnehmen"
@@ -190,7 +190,7 @@ internal class OfflineVisualOdometry {
                         val p2=MatOfPoint2f(*q.toTypedArray())
                         val mask=Mat()
                         val E=Calib3d.findEssentialMat(p1,p2,k,
-                            Calib3d.RANSAC,.999,1.5,1500,mask)
+                            Calib3d.RANSAC,.999,1.5,mask)
                         if(!E.empty()&&E.rows()==3){
                             val relR=Mat();val relT=Mat()
                             try{
