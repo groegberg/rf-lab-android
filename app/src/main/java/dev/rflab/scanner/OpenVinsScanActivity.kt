@@ -34,7 +34,7 @@ import java.util.concurrent.Executors
  * since these independent origins have not been registered or calibrated.
  */
 class OpenVinsScanActivity : com.openvins.android.MainActivity() {
-    private val background = Color.rgb(9, 18, 30)
+    private val bgColor = Color.rgb(9, 18, 30)
     private val accent = Color.rgb(95, 222, 209)
     private lateinit var scan: RoomScanStore
     private lateinit var sessionEvents: SessionStore
@@ -70,7 +70,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             text = s
             isAllCaps = false
             textSize = 12f
-            setTextColor(if (primary) background else Color.WHITE)
+            setTextColor(if (primary) bgColor else Color.WHITE)
             background = shape(if (primary) accent else Color.rgb(27, 54, 73))
             setOnClickListener { action() }
         }
@@ -79,6 +79,8 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        window.statusBarColor = bgColor
+        window.navigationBarColor = bgColor
         scan = RoomScanStore(this, "rflab_openvins_scan_v1.json")
         sessionEvents = SessionStore(this)
 
@@ -97,7 +99,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(background)
+            setBackgroundColor(bgColor)
             setPadding(dp(8), dp(5), dp(8), dp(7))
         }
         val toolbar = LinearLayout(this).apply {
