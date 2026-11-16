@@ -59,6 +59,10 @@ def main() -> None:
         str(SOURCE))
     run(sys.executable, str(PROJECT / "research" / "openvins_record_export_patch.py"),
         str(SOURCE))
+    # RF Lab's scanner subclasses the real native VIO activity, receiving
+    # initialized MSCKF poses via callbacks without a second camera pipeline.
+    run(sys.executable, str(PROJECT / "tools" / "patch_embedded_openvins_scan.py"),
+        str(SOURCE))
 
     cmake = SOURCE / "app" / "src" / "main" / "cpp" / "CMakeLists.txt"
     c = cmake.read_text(encoding="utf-8")
