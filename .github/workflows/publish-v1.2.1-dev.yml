@@ -4,7 +4,7 @@ on:
   push:
     branches: [experiment/openvins-live-vio-v1.2]
     paths:
-      - '.github/workflows/publish-v1.2.0-dev2.yml'
+      - '.github/workflows/publish-v1.2.1-dev.yml'
 
 permissions:
   contents: write
@@ -53,4 +53,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "RF Lab v1.2.1-dev.1 — OpenVINS Native Live VIO Import + Offline Depth Anything 3" \
-            --notes "Camera2 640x480 tracking input up to 30fps, dedicated 200Hz IMU, OIS/EIS disabled when supported, correct pre-correction intrinsics with crop-aware approximation, exact shutter timing, live camera/gyro/drop telemetry. Offline DA3 depth preserved. Independent real-time VIO is tested in a separately licensed OpenVINS research APK, NOT yet integrated into RF Lab. Back up measurements before installing. Keep main v0.5.0 intact. See docs/OPENVINS_LIVE_VIO_V121.md."
+            --notes "New native OpenVINS MSCKF live VIO experiment launcher (separate GPLv3 APK), local import of native camera pose CSV and colour JPEGs from the OpenVINS research ZIP, strict timestamp alignment and real on-device offline Depth Anything 3 Small inference. Preserves Camera2 original capture and ARCore legacy fallback. Pixel camera/IMU calibration is UNVALIDATED, and global loop closure / metric TSDF fusion are not yet implemented. No cloud/root. Back up measurements before installing. See docs/OPENVINS_LIVE_VIO_V121.md."
