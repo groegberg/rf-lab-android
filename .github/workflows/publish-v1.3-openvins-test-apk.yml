@@ -1,0 +1,63 @@
+name: Publish RF Lab v1.3 embedded OpenVINS private test APK
+
+on:
+  push:
+    branches: [feature/embedded-openvins-v1.3]
+    paths:
+      - .github/workflows/publish-v1.3-openvins-test-apk.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-verified-private-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify proven Android test and 16KiB build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=43826600357
+          expected_sha=2f731b1ecca94f35bdb854bbcf6c2a9af2ff8451
+          expected_apk_sha=b443a07fb3d5c03abdabe9c1c09a55d10c5687a313a1a1b2449ee2b235541384
+          actual_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .head_sha)"
+          actual_conclusion="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .conclusion)"
+          test "$actual_sha" = "$expected_sha"
+          test "$actual_conclusion" = success
+          printf 'Verified CI run %s for %s\n' "$run_id" "$expected_sha"
+          printf '%s\n' "$expected_apk_sha" > expected_apk_sha.txt
+      - name: Download the exact previously tested native OpenVINS APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download 43826600357 --repo "$GITHUB_REPOSITORY" \
+            --name RF-Lab-Pixel10-Debug-APK --dir ./tested
+          mapfile -t files < <(find tested -type f -name app-debug.apk)
+          test "${#files[@]}" -eq 1
+          cp "${files[0]}" RF-Lab-v1.3.0-OpenVINS-Pixel-Test.apk
+          echo "$(cat expected_apk_sha.txt)  RF-Lab-v1.3.0-OpenVINS-Pixel-Test.apk" | sha256sum -c -
+          test "$(stat -c %s RF-Lab-v1.3.0-OpenVINS-Pixel-Test.apk)" -gt 80000000
+      - name: Publish private repository prerelease for device testing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.3.0-openvins-private-test.1
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Test release already exists. Not overwriting published APK."
+            exit 0
+          fi
+          gh release create "$tag" RF-Lab-v1.3.0-OpenVINS-Pixel-Test.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target 2f731b1ecca94f35bdb854bbcf6c2a9af2ff8451 \
+            --prerelease \
+            --title "RF Lab v1.3.0 — Embedded OpenVINS (PRIVATE Pixel test)" \
+            --notes "PRIVATE INTERNAL DEVICE TEST ONLY. This build embeds native GPLv3 OpenVINS Mobile MSCKF tracking directly in RF Lab under Android targetSdk 35. Select OpenVINS / ARCore / Camera2 from RF Lab's 3D scan setup; record VIO data and use Gallery's internal OpenVINS import. Android CI succeeded with native Boost rebuilt for 16KiB pages, all JNI dynamic dependencies present, Kotlin unit tests, all ELF 16KiB segments and zipalign checks. No Pixel camera/IMU metric calibration, global loop closure, shared ARCore/OpenVINS 3D fusion or physical-device tracking validation. This combined GPLv3 program is only distributed in the PRIVATE project for authorized internal evaluation. External redistribution requires GPLv3-compatible provision of complete corresponding source code and license review. Back up RF Lab sessions first. SHA256 APK: b443a07fb3d5c03abdabe9c1c09a55d10c5687a313a1a1b2449ee2b235541384"
