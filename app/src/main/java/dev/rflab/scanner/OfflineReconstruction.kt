@@ -79,6 +79,34 @@ internal class OfflineReconstruction(private val context:android.content.Context
             }
         }
         val photos=PhotoSessionStore(context).frames(session)
+        val vioQuality = if(external.isNotEmpty())
+            VioSessionDiagnostics.inspect(external,
+                photos.map { it.json.optLong("timestamp_ns") }) else null
+        if (vioQuality != null) {
+            warnings += vioQuality.warnings
+            File(folder,"openvins_capture_diagnostics.json").writeText(
+                JSONObject()
+                    .put("source","Native OpenVINS MSCKF")
+                    .put("calibration_verified",false)
+                    .put("metric_accuracy_verified",false)
+                    .put("loop_closure_optimized",false)
+                    .put("pose_count",vioQuality.poseCount)
+                    .put("photo_count",vioQuality.photoCount)
+                    .put("matched_photos",vioQuality.matchedPhotos)
+                    .put("pose_rate_hz",vioQuality.poseRateHz)
+                    .put("median_pose_gap_ms",vioQuality.medianPoseGapMs)
+                    .put("max_pose_gap_ms",vioQuality.maxPoseGapMs)
+                    .put("duration_s",vioQuality.durationSeconds)
+                    .put("path_length_unvalidated_units",
+                        vioQuality.pathLengthUnvalidated)
+                    .put("return_offset_unvalidated_units",
+                        vioQuality.returnOffsetUnvalidated)
+                    .put("return_offset_to_path_length",
+                        vioQuality.returnOffsetToPathLength ?: JSONObject.NULL)
+                    .put("return_ratio_only_useful_if_route_was_closed",true)
+                    .put("warnings",JSONArray(vioQuality.warnings))
+                    .toString(2))
+        }
         if(photos.isEmpty())warnings+="Keine hochauflösenden Fotos vorhanden"
         // Explicitly bounded run to protect thermal/memory stability.
         val selected=photos.take(24)

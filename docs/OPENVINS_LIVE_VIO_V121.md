@@ -48,3 +48,17 @@ f0c465695c67c0eac786f4edf83a68109a6a58a9 with licensed research patches.
 - Apartment imagery and motion traces are private and should not be publicly uploaded.
 
 Next: camera/IMU calibration, timed dynamic motion validation, cross-run drift/loop metrics, independent loop-closing map optimization, verified scale alignment between DA3 and VIO, then volumetric texture-mesh fusion.
+
+## Native VIO recording diagnostics
+
+RF Lab now reports camera/pose timestamp matches, average native VIO pose
+rate, the largest gap between successive native states and explicit warnings
+for a clock mismatch, sparse poses or missing photo associations. Each
+offline run containing native OpenVINS data writes
+`openvins_capture_diagnostics.json` into its local results directory.
+
+The start-to-end offset divided by traversed path length is included solely
+as an **unvalidated recording diagnostic**, NOT a drift or loop-closure
+accuracy claim: it is only meaningful when the user actually returns to
+the starting physical position. No diagnostic replaces a calibrated Pixel
+camera-to-IMU transform or a physical ground-truth measurement.

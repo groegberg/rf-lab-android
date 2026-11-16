@@ -92,7 +92,7 @@ class OfflineReconstructionActivity:Activity() {
             textSize=12f;setTextColor(Color.rgb(190,220,230))
             text="Bereit · "+store.frames(session).size+" Originalfotos\n"+
                 "Nur relative Tiefen/Posen, KEIN vermessener 3D-Raum."
-            maxLines=4
+            maxLines=6
             setPadding(dp(9),dp(11),dp(9),dp(9))
         }
         root.addView(details)
@@ -129,11 +129,18 @@ class OfflineReconstructionActivity:Activity() {
                     result.lastDepth?.let{depth.setImageBitmap(it)}
                     title.text="OFFLINE · ERGEBNIS"
                     details.text=if(result.externalVio.isNotEmpty()){
+                        val diag=VioSessionDiagnostics.inspect(result.externalVio,
+                            store.frames(session).map{
+                                it.json.optLong("timestamp_ns") })
                         result.da3Images.toString()+" DA3-Bilder · "+
-                            result.pairedImages+" VIO-Posen zugeordnet\n"+
-                            result.externalVio.size+
-                            " native OpenVINS-Messwerte · Kalibrierung ungeprüft\n"+
-                            "Kein vermessenes Mesh, keine optimierte Loop Closure."
+                            diag.matchedPhotos+"/"+diag.photoCount+
+                            " Fotos mit VIO-Pose\n"+
+                            String.format(java.util.Locale.GERMANY,
+                                "%.1f Posen/s · max. Lücke %.0f ms",
+                                diag.poseRateHz,diag.maxPoseGapMs)+"\n"+
+                            "Kalibrierung ungeprüft · keine Loop Closure"+
+                            if(diag.warnings.isNotEmpty())
+                                "\n⚠ "+diag.warnings.first() else ""
                     }else{
                         result.da3Images.toString()+
                             " DA3-Bilder · "+result.pairedImages+

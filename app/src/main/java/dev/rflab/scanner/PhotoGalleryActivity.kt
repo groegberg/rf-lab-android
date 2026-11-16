@@ -100,10 +100,20 @@ class PhotoGalleryActivity: Activity() {
         grid.removeAllViews()
         val entries=store.frames(session)
         val vio=ExternalVioTrajectory.read(session)
+        val diagnostics = VioSessionDiagnostics.inspect(
+            vio, entries.map { it.json.optLong("timestamp_ns") })
         summary.text=entries.size.toString()+" Fotos · nur lokal gespeichert\n"+
-            if(vio.isNotEmpty())vio.size.toString()+
-                " native OpenVINS-VIO-Posen · Kalibrierung unvalidiert"
-            else "Camera2-Bilder · keine unabhängige metrische SLAM-Pose"
+            if(vio.isNotEmpty()){
+                val rate=String.format(java.util.Locale.GERMANY,"%.1f",
+                    diagnostics.poseRateHz)
+                vio.size.toString()+" native OpenVINS-Posen · "+
+                    diagnostics.matchedPhotos+"/"+diagnostics.photoCount+
+                    " Fotos mit VIO-Pose\n"+
+                    rate+" Posen/s · größte Lücke "+
+                    diagnostics.maxPoseGapMs.toInt()+" ms · Kalibrierung unvalidiert"+
+                    if(diagnostics.warnings.isNotEmpty())
+                        "\n⚠ "+diagnostics.warnings.first() else ""
+            }else "Camera2-Bilder · keine unabhängige metrische SLAM-Pose"
         selector.text=session.name.removePrefix("session_")+"  ▾"
         val columnWidth=(resources.displayMetrics.widthPixels-dp(48))/3
         entries.forEachIndexed{index,f->

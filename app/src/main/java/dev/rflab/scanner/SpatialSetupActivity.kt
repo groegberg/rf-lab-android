@@ -192,7 +192,7 @@ class SpatialSetupActivity : Activity() {
                     startActivity(Intent(Intent.ACTION_VIEW,
                         android.net.Uri.parse(
                             "https://github.com/groegberg/rf-lab-android/" +
-                            "releases/tag/openvins-pixel-v0.2-research")))
+                            "releases")))
                 }.show()
         }
     }
