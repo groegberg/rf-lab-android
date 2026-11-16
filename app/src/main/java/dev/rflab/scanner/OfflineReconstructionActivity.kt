@@ -195,10 +195,15 @@ internal class RelativeTrajectoryView(context:android.content.Context):View(cont
             canvas.drawText("Noch keine optische Trajektorie",25f,height*.55f,text)
             return
         }
-        val centers=if(externalPoses.size>=2)
+        val isOpenVins=externalPoses.size>=2
+        val centers=if(isOpenVins)
             externalPoses.map{it.center()} else poses.map{it.center()}
+        // Native OpenVINS initializes a gravity-aligned global frame with
+        // X/Y horizontal and Z vertical. Old two-view OpenCV kept X/Z.
+        val horizontalY=if(isOpenVins)1 else 2
         val minX=centers.minOf{it[0]};val maxX=centers.maxOf{it[0]}
-        val minZ=centers.minOf{it[2]};val maxZ=centers.maxOf{it[2]}
+        val minZ=centers.minOf{it[horizontalY]}
+        val maxZ=centers.maxOf{it[horizontalY]}
         val length=max(1e-4,max(maxX-minX,maxZ-minZ))
         val scale=min((width-70.0)/length,(height-130.0)/length)
         fun px(x:Double)=35+(x-minX)*scale+
@@ -208,7 +213,7 @@ internal class RelativeTrajectoryView(context:android.content.Context):View(cont
         val route=Path()
         for((i,c)in centers.withIndex()){
             val x=px(c[0]).toFloat()
-            val y=py(c[2]).toFloat()
+            val y=py(c[horizontalY]).toFloat()
             if(i==0)route.moveTo(x,y) else route.lineTo(x,y)
             if(externalPoses.isEmpty() && i>0 && !poses[i].accepted)
                 canvas.drawCircle(x,y,4f,point)
