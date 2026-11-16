@@ -29,6 +29,7 @@ class PhotoGalleryActivity: Activity() {
     private val background=Color.rgb(9,18,30)
     private val writer=Executors.newSingleThreadExecutor()
     private var exportCode=712
+    private var importCode=713
 
     private fun dp(n:Int)=(n*resources.displayMetrics.density+.5f).toInt()
     private fun shape(color:Int)=GradientDrawable().apply {
@@ -70,6 +71,12 @@ class PhotoGalleryActivity: Activity() {
             setPadding(dp(5),dp(9),0,dp(10))
         }
         root.addView(summary)
+        root.addView(button("OpenVINS-Aufnahme importieren (ZIP)") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type="application/zip"
+            },importCode)
+        },LinearLayout.LayoutParams(-1,dp(48)))
         root.addView(button("Offline: Optische Posen + Depth Anything 3"){
             startActivity(Intent(this,OfflineReconstructionActivity::class.java).apply{
                 putExtra("photo_session",session.name)
@@ -92,8 +99,11 @@ class PhotoGalleryActivity: Activity() {
     private fun refresh(){
         grid.removeAllViews()
         val entries=store.frames(session)
+        val vio=ExternalVioTrajectory.read(session)
         summary.text=entries.size.toString()+" Fotos · nur lokal gespeichert\n"+
-            "Originalbilder · noch keine SLAM-Kameraposen"
+            if(vio.isNotEmpty())vio.size.toString()+
+                " native OpenVINS-VIO-Posen · Kalibrierung unvalidiert"
+            else "Camera2-Bilder · keine unabhängige metrische SLAM-Pose"
         selector.text=session.name.removePrefix("session_")+"  ▾"
         val columnWidth=(resources.displayMetrics.widthPixels-dp(48))/3
         entries.forEachIndexed{index,f->
@@ -157,6 +167,36 @@ class PhotoGalleryActivity: Activity() {
     @Deprecated("Storage Access Framework result")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
         super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode==importCode && resultCode==RESULT_OK){
+            val uri=data?.data?:return
+            summary.text="OpenVINS-Bilder und Posen werden lokal importiert …"
+            writer.execute {
+                try {
+                    val result=contentResolver.openInputStream(uri)?.use {
+                        OpenVinsSessionImport(applicationContext).import(it)
+                    }?:error("VIO-Archiv konnte nicht geöffnet werden")
+                    runOnUiThread{
+                        if(!isFinishing && !isDestroyed){
+                            session=result.session
+                            refresh()
+                            Toast.makeText(this,
+                                result.photos.toString()+" RGB-Bilder + "+
+                                    result.poses+" VIO-Posen importiert",
+                                Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }catch(t:Exception){
+                    runOnUiThread{
+                        if(!isFinishing && !isDestroyed){
+                            refresh()
+                            Toast.makeText(this,"Import fehlgeschlagen: "+
+                                (t.message?:""),Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+            return
+        }
         if(requestCode!=exportCode||resultCode!=RESULT_OK)return
         val uri=data?.data?:return
         val snapshot=session
