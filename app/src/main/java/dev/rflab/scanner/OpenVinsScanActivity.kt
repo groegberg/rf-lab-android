@@ -2,6 +2,13 @@ package dev.rflab.scanner
 
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Build
+import java.io.File
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
@@ -41,6 +48,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private lateinit var cloud: ScanCloudView
     private lateinit var stateLabel: TextView
     private lateinit var detailLabel: TextView
+    private lateinit var diagnosticLabel: TextView
     private lateinit var startButton: Button
     private lateinit var processButton: Button
     private val worker = Executors.newSingleThreadExecutor()
@@ -48,6 +56,8 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private var nativePoseSeen = false
     private var lastUiNs = 0L
     private var lastSavedNs = 0L
+    private var lastDiagNs = 0L
+    private var currentHealth: VioInitializationHealth? = null
     private var latestPosition: FloatArray? = null
     private var latestQuaternion: DoubleArray? = null
     private val oldId = com.openvins.android.R.id.trajectory_view
@@ -155,9 +165,14 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             maxLines = 2
             setPadding(dp(7), 0, dp(7), dp(5))
         }
+        diagnosticLabel = label("Native Diagnose: noch keine Messdaten", 10.7f).apply {
+            setTextColor(Color.rgb(171, 205, 221))
+            setPadding(dp(7), 0, dp(7), dp(6))
+            maxLines = 3
+        }
         root.addView(stateLabel)
         root.addView(detailLabel)
-
+        root.addView(diagnosticLabel)
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -175,6 +190,10 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         controls.addView(processButton,
             LinearLayout.LayoutParams(0, dp(50), 1.25f))
         root.addView(controls)
+        root.addView(button("Diagnose anzeigen / kopieren") { showDiagnostics() },
+            LinearLayout.LayoutParams(-1, dp(39)).apply {
+                topMargin = dp(5)
+            })
 
         setContentView(root)
         SystemBarsSafeArea.install(this, root)
@@ -211,6 +230,9 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         latestQuaternion = null
         lastUiNs = 0L
         lastSavedNs = 0L
+        lastDiagNs = 0L
+        currentHealth = null
+        diagnosticLabel.text = "IMU-Ruhephase erfassen · 3–5 Sekunden ruhig halten"
         try {
             if (!startEmbeddedScan()) {
                 stateLabel.text = "OpenVINS nicht startbereit – Kamera/Ordner prüfen"
@@ -225,9 +247,9 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                 .put("metric_calibration_validated", false)
                 .put("arcore_frame_registered", false))
             startButton.text = "■ Scan stoppen"
-            stateLabel.text = "○ Initialisierung · langsam seitwärts bewegen"
-            detailLabel.text = "Kamera + IMU laufen · RGB-Frames und native " +
-                "Trajektorie werden synchron aufgezeichnet"
+            stateLabel.text = "○ Initialisierung · erst 3–5 Sekunden ruhig halten"
+            detailLabel.text = "Das Smartphone möglichst ruhig halten, dann langsam " +
+                "seitwärts bewegen. Kamera/IMU werden nativ erfasst."
             cloud.invalidate()
         } catch (t: Throwable) {
             stateLabel.text = "OpenVINS-Start fehlgeschlagen: " +
@@ -249,6 +271,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                 .put(mapped[2].toDouble())))
         cloud.invalidate()
         val now = SystemClock.elapsedRealtimeNanos()
+        refreshNativeDiagnostics(now)
         if (now - lastUiNs > 250_000_000L) {
             lastUiNs = now
             sessionEvents.write("vio_camera_pose", JSONObject()
@@ -277,9 +300,88 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
 
     override fun onNativePoseUnavailable() {
         if (!recording) return
-        stateLabel.text = if (nativePoseSeen)
-            "○ Native Pose nicht verfügbar · Tracking prüfen"
-        else "○ VIO initialisiert · Struktur und seitliche Bewegung nötig"
+        refreshNativeDiagnostics(SystemClock.elapsedRealtimeNanos())
+    }
+
+    private fun refreshNativeDiagnostics(nowNs: Long) {
+        if (!recording || !::diagnosticLabel.isInitialized) return
+        if (nowNs - lastDiagNs < 600_000_000L) return
+        lastDiagNs = nowNs
+        try {
+            val (counters, clocks) = readNativeDiagnostics()
+            val health = VioInitializationHealth.read(counters, clocks)
+            currentHealth = health
+            diagnosticLabel.text = health.compact()
+            if (!health.initialized) {
+                stateLabel.text = "○ " + health.issue
+                if (health.rawCamera >= 10 && health.fedImu >= 100 &&
+                    health.processedCamera >= 10 &&
+                    health.expiredCamera <= health.processedCamera) {
+                    detailLabel.text = "VIO hat Eingabedaten: " +
+                        "Handy zunächst 3–5 s ruhig halten; " +
+                        "danach langsam bewegen. Keine Pose wird simuliert."
+                }
+            }
+        } catch (error: Throwable) {
+            diagnosticLabel.text = "Native Diagnose nicht lesbar: " +
+                (error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun cameraDiagnostics(): String = try {
+        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraId = manager.cameraIdList.firstOrNull {
+            manager.getCameraCharacteristics(it)
+                .get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_BACK
+        }
+        val props = cameraId?.let { manager.getCameraCharacteristics(it) }
+        val clock = props?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+        val clockText = when (clock) {
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME ->
+                "Camera2 boot-time/realtime"
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN ->
+                "Camera2 timestamp source UNKNOWN"
+            else -> "Camera2 timestamp source unavailable"
+        }
+        val intrinsic = props?.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+        val calibration = File(getExternalFilesDir(null),
+            "config/PIXEL_CALIBRATION_WARNING.txt")
+        "Android " + Build.VERSION.RELEASE + " / API " +
+            Build.VERSION.SDK_INT + " / " + Build.MODEL + "\n" +
+            "Camera2 id=" + (cameraId ?: "unknown") + " · " + clockText +
+            " · intrinsic_available=" + (intrinsic != null) + "\n" +
+            "Camera2 calibration seed file=" + calibration.exists() + "\n" +
+            (if(calibration.isFile)calibration.readText().take(750) else
+                "No Camera2 calibration seed found: old/unvalidated config may be in use")
+    } catch (e: Exception) {
+        "Camera2 metadata unavailable: " + (e.message ?: "unknown")
+    }
+
+    private fun diagnosticReport(): String {
+        val current = try {
+            val (counts, times) = readNativeDiagnostics()
+            VioInitializationHealth.read(counts, times)
+        } catch (_: Throwable) { currentHealth }
+        return (current?.report() ?: "Native diagnostics unavailable") +
+            "\nRF Lab live VIO poses=" + scan.poseCount() +
+            "\nRF Lab nativePoseSeen=" + nativePoseSeen +
+            "\n" + cameraDiagnostics()
+    }
+
+    private fun showDiagnostics() {
+        val body = diagnosticReport()
+        AlertDialog.Builder(this)
+            .setTitle("OpenVINS · echte Initialisierungsdiagnose")
+            .setMessage(body)
+            .setNegativeButton("Schließen", null)
+            .setPositiveButton("Text kopieren") { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE)
+                    as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("RF Lab OpenVINS diagnostics", body))
+                Toast.makeText(this, "Diagnose kopiert", Toast.LENGTH_SHORT).show()
+            }.show()
     }
 
     private fun stopCapture() {
@@ -289,6 +391,13 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         try {
             stopEmbeddedScan()
             scan.save()
+            // Retain the actual native queue/IMU counters even when no pose
+            // was initialized. No Logcat/ADB access is needed to investigate.
+            val report = diagnosticReport()
+            File(filesDir, "rflab_openvins_last_diagnostics.txt")
+                .writeText(report)
+            sessionEvents.write("vio_diagnostic", JSONObject()
+                .put("text", report))
             sessionEvents.write("spatial_optical_scan_end", JSONObject()
                 .put("backend", "OpenVINS")
                 .put("native_camera_poses", scan.poseCount())
