@@ -84,7 +84,7 @@ jobs:
           grep -q 'Scoped storage' openvins-mobile/app/src/main/java/com/openvins/android/MainActivity.kt
           grep -q 'vio_health_status' openvins-mobile/app/src/main/res/layout/activity_main.xml
           grep -q 'vio_camera_trajectory.csv' openvins-mobile/app/src/main/cpp/native-lib.cpp
-          grep -q 'openvins-mobile' openvins-mobile/settings.gradle
+          grep -q 'open_vins_android' openvins-mobile/settings.gradle
       - name: Build real OpenVINS Mobile VIO demo for ARM64
         working-directory: openvins-mobile
         shell: bash
