@@ -65,6 +65,13 @@ def main() -> None:
     begin = c.index("if(ANDROID_ABI STREQUAL armeabi-v7a)")
     end = c.index("# Include OpenCV project", begin)
     c = c[:begin] + "# arm64 NEON is intrinsic; never use -mfpu.\n\n" + c[end:]
+    # Native VIO .so must be loadable on both 4KiB and 16KiB Android.
+    c += """
+# Android NDK r26: explicitly opt in to 16 KiB ELF PT_LOAD alignment.
+target_link_options(native-lib PRIVATE
+    "-Wl,-z,max-page-size=16384"
+    "-Wl,-z,common-page-size=16384")
+"""
     write(cmake, c)
 
     # The host application controls targetSdk and its camera permission.
