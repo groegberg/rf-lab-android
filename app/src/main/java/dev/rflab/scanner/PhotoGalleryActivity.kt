@@ -71,7 +71,32 @@ class PhotoGalleryActivity: Activity() {
             setPadding(dp(5),dp(9),0,dp(10))
         }
         root.addView(summary)
-        root.addView(button("OpenVINS-Aufnahme importieren (ZIP)") {
+        root.addView(button("Interne OpenVINS-Aufnahme übernehmen") {
+            summary.text="Native VIO-Daten werden direkt übernommen …"
+            writer.execute {
+                try {
+                    val result=OpenVinsSessionImport(applicationContext).importLocalLatest()
+                    runOnUiThread {
+                        if(!isFinishing && !isDestroyed) {
+                            session=result.session
+                            refresh()
+                            Toast.makeText(this,result.photos.toString()+
+                                " Fotos + "+result.poses+" native VIO-Posen",
+                                Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }catch(t:Exception) {
+                    runOnUiThread {
+                        if(!isFinishing && !isDestroyed) {
+                            refresh()
+                            Toast.makeText(this,"Übernahme fehlgeschlagen: "+
+                                (t.message?:"Fehler"),Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        },LinearLayout.LayoutParams(-1,dp(48)))
+        root.addView(button("Ältere OpenVINS-ZIP importieren") {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type="application/zip"

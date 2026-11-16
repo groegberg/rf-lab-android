@@ -15,6 +15,11 @@
         <meta-data android:name="com.google.ar.core" android:value="optional"/>
         <activity android:name=".AcousticLabActivity" android:exported="false"/>
         <activity android:name=".SpatialScanActivity" android:exported="false"/>
+        <!-- Internal GPLv3 VIO activity: same APK, same Android target SDK. -->
+        <activity android:name="com.openvins.android.MainActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.AppCompat.NoActionBar"/>
         <activity android:name=".RgbdSurfaceViewerActivity" android:exported="false"/>
         <activity android:name=".DepthComparisonActivity" android:exported="false"/>
         <activity android:name=".PhotoCaptureActivity" android:exported="false"/>

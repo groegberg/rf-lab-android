@@ -16,8 +16,8 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.2.1-dev"
+        versionCode = 22
+        versionName = "1.3.0-embedded-vio-dev"
         // Pixel 10 Pro XL: bundle only 64-bit ARM native OpenCV/LiteRT.
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -39,7 +39,9 @@ kotlin {
 
 dependencies {
     implementation("com.google.ar:core:1.57.0")
-    implementation("org.opencv:opencv:4.14.0")
+    // Share the same OpenCV version and Mat ABI with native OpenVINS.
+    implementation(project(":openvins_opencv"))
+    implementation(project(":openvins_embed"))
     implementation("com.google.ai.edge.litert:litert:2.3.0")
     implementation("com.google.ai.edge.litert:litert-gpu:2.3.0")
     testImplementation("junit:junit:4.13.2")
