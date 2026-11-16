@@ -86,7 +86,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         val nativeRoot = container.getChildAt(0)
             ?: error("Native OpenVINS camera view missing")
         container.removeView(nativeRoot)
-        findViewById<View>(oldId)?.visibility = View.GONE
+        nativeRoot.findViewById<View>(oldId)?.visibility = View.GONE
         for (id in listOf(com.openvins.android.R.id.toggle_reset,
                 com.openvins.android.R.id.toggle_record,
                 com.openvins.android.R.id.open_folder)) {
