@@ -125,15 +125,24 @@ class OfflineReconstructionActivity:Activity() {
                         return@runOnUiThread
                     }
                     trajectory.poses=result.trajectory?.poses?:emptyList()
+                    trajectory.externalPoses=result.externalVio
                     result.lastDepth?.let{depth.setImageBitmap(it)}
                     title.text="OFFLINE · ERGEBNIS"
-                    details.text=result.da3Images.toString()+
-                        " DA3-Bilder · "+result.pairedImages+
-                        " Posen zugeordnet\n"+
-                        result.acceptedPairs+" gültige VO-Schritte · "+
-                        result.lostPairs+" unzuverlässig · "+
-                        (result.trajectory?.gyroFusedPairs?:0)+" IMU-Rotationen\n"+
-                        "Relativer Maßstab – kein metrisches Mesh."
+                    details.text=if(result.externalVio.isNotEmpty()){
+                        result.da3Images.toString()+" DA3-Bilder · "+
+                            result.pairedImages+" VIO-Posen zugeordnet\n"+
+                            result.externalVio.size+
+                            " native OpenVINS-Messwerte · Kalibrierung ungeprüft\n"+
+                            "Kein vermessenes Mesh, keine optimierte Loop Closure."
+                    }else{
+                        result.da3Images.toString()+
+                            " DA3-Bilder · "+result.pairedImages+
+                            " Posen zugeordnet\n"+
+                            result.acceptedPairs+" gültige VO-Schritte · "+
+                            result.lostPairs+" unzuverlässig · "+
+                            (result.trajectory?.gyroFusedPairs?:0)+" IMU-Rotationen\n"+
+                            "Relativer Maßstab – kein metrisches Mesh."
+                    }
                     calculate.text="Erneut auswerten"
                     calculate.isEnabled=true
                     running=false
@@ -165,6 +174,8 @@ class OfflineReconstructionActivity:Activity() {
 internal class RelativeTrajectoryView(context:android.content.Context):View(context){
     var poses:List<OfflineVisualOdometry.Pose> = emptyList()
         set(value){field=value;invalidate()}
+    var externalPoses:List<ExternalVioTrajectory.Sample> = emptyList()
+        set(value){field=value;invalidate()}
     private val line=Paint(Paint.ANTI_ALIAS_FLAG).apply{
         color=Color.rgb(71,216,188);strokeWidth=4f;style=Paint.Style.STROKE
     }
@@ -177,12 +188,15 @@ internal class RelativeTrajectoryView(context:android.content.Context):View(cont
     override fun onDraw(canvas:Canvas){
         super.onDraw(canvas)
         canvas.drawColor(Color.rgb(15,31,45))
-        canvas.drawText("KAMERAPFAD · RELATIV",25f,40f,text)
-        if(poses.size<2){
+        canvas.drawText(if(externalPoses.isNotEmpty())
+            "KAMERAPFAD · OPENVINS (UNKALIBRIERT)"
+            else "KAMERAPFAD · RELATIV",25f,40f,text)
+        if(poses.size<2 && externalPoses.size<2){
             canvas.drawText("Noch keine optische Trajektorie",25f,height*.55f,text)
             return
         }
-        val centers=poses.map{it.center()}
+        val centers=if(externalPoses.size>=2)
+            externalPoses.map{it.center()} else poses.map{it.center()}
         val minX=centers.minOf{it[0]};val maxX=centers.maxOf{it[0]}
         val minZ=centers.minOf{it[2]};val maxZ=centers.maxOf{it[2]}
         val length=max(1e-4,max(maxX-minX,maxZ-minZ))
@@ -196,7 +210,7 @@ internal class RelativeTrajectoryView(context:android.content.Context):View(cont
             val x=px(c[0]).toFloat()
             val y=py(c[2]).toFloat()
             if(i==0)route.moveTo(x,y) else route.lineTo(x,y)
-            if(i>0&&!poses[i].accepted)
+            if(externalPoses.isEmpty() && i>0 && !poses[i].accepted)
                 canvas.drawCircle(x,y,4f,point)
         }
         canvas.drawPath(route,line)
