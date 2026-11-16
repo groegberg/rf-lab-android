@@ -51,6 +51,36 @@ done
 if test -f "$BUILD_ROOT/stage/lib/libboost_atomic.so"; then
   cp "$BUILD_ROOT/stage/lib/libboost_atomic.so" "$LIBDIR/"
 fi
+# The Android package manager stores only files named *.so. Boost.Build can
+# assign versioned DT_SONAME entries like libboost_thread.so.1.72.0; these
+# cannot be resolved unless we normalize the dynamic names to the APK names.
+# patchelf's page-size option preserves 16 KiB PT_LOAD layout.
+if ! command -v patchelf >/dev/null 2>&1; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq patchelf
+fi
+for so in "$LIBDIR"/libboost_*.so; do
+  name="$(basename "$so")"
+  patchelf --page-size 16384 --set-soname "$name" "$so"
+  for dep in system filesystem thread chrono date_time atomic; do
+    from="libboost_$dep.so.1.72.0"
+    to="libboost_$dep.so"
+    if readelf -d "$so" | grep -Fq "[$from]"; then
+      patchelf --page-size 16384 --replace-needed "$from" "$to" "$so"
+    fi
+  done
+done
+# Fail rather than package a library whose dynamic name still points to a
+# versioned file absent from the Android APK.
+for so in "$LIBDIR"/libboost_*.so; do
+  actual="$(patchelf --print-soname "$so")"
+  test "$actual" = "$(basename "$so")" || {
+    echo "Incorrect Android Boost SONAME in $so: $actual" >&2; exit 1;
+  }
+  if readelf -d "$so" | grep -E 'NEEDED.*libboost_.*so\.1\.72\.0'; then
+    echo "Unresolved versioned Boost dependency in $so" >&2; exit 1
+  fi
+done
 # CMake and APK packaging consume only the binaries from the exact same
 # directory; old 4 KiB boost binaries cannot silently leak into the APK.
 echo "Rebuilt Boost ARM64 shared objects:"
