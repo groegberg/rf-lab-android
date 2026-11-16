@@ -18,7 +18,7 @@ def main(apk):
     sdk=os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
     if not sdk:
         raise SystemExit("ANDROID_HOME is required")
-    readelf=pathlib.Path(sdk)/"ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+    readelf=pathlib.Path(sdk)/"ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
     if not readelf.is_file():
         raise SystemExit("Pinned NDK llvm-readelf unavailable: "+str(readelf))
     with zipfile.ZipFile(apk) as archive:

@@ -92,7 +92,7 @@ target_link_options(native-lib PRIVATE
 android {
     namespace 'com.openvins.android'
     compileSdk 36
-    ndkVersion '26.3.11579264'
+    ndkVersion '28.2.13676358'
     defaultConfig {
         minSdk 31
         ndk { abiFilters 'arm64-v8a' }
@@ -103,7 +103,8 @@ android {
                 arguments '-DOpenCV_DIR=' + rootProject.file('third_party/openvins_mobile/thirdparty/opencv/native').absolutePath,
                     '-DBOOST_DIR=' + rootProject.file('third_party/openvins_mobile/thirdparty/boost').absolutePath,
                     '-DEIGEN3_DIR=' + rootProject.file('third_party/openvins_mobile/thirdparty/eigen3').absolutePath,
-                    '-DANDROID_ARM_NEON=ON'
+                    '-DANDROID_ARM_NEON=ON',
+                    '-DANDROID_STL=c++_shared'
             }
         }
     }

@@ -25,7 +25,7 @@ On a fresh checkout, first run:
 
   python3 tools/bootstrap_embedded_openvins.py
 
-Then build with Java 17, Android SDK 36, NDK 26.3.11579264,
+Then build with Java 17, Android SDK 36, NDK 28.2.13676358,
 CMake 3.18.1, Gradle 8.13:
 
   gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
@@ -70,3 +70,14 @@ make an automatically scaled/fused metric room mesh.
 5. Gallery -> Interne OpenVINS-Aufnahme übernehmen.
 6. Check pose/photos time association and gaps; run offline DA3.
 7. Compare with a taped-distance room route and legacy ARCore.
+
+## Native runtime ABI and 16 KiB verification
+
+The pinned Android NDK r28c (28.2.13676358) builds both embedded OpenVINS
+and the required rebuilt Boost 1.72 libraries. OpenVINS CMake opts into
+`ANDROID_STL=c++_shared` so all native modules use a single dynamically
+packaged libc++ runtime. NDK r28c provides 16 KiB-aligned libc++ shared
+objects; Android Gradle Plugin packages the runtime. CI checks every ARM64
+PT_LOAD alignment, ZIP alignment and the *actual* ELF DT_NEEDED names.
+The app still requires a physical Pixel test for initialized VIO and camera
+clock accuracy; build success cannot prove visual-inertial localization.
