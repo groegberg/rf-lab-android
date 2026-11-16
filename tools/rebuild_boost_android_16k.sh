@@ -21,7 +21,7 @@ SRC="$BUILD_ROOT/boost_1_72_0"
 test -f "$SRC/bootstrap.sh"
 (
  cd "$SRC"
- ./bootstrap.sh --with-libraries=system,filesystem,thread,chrono,date_time
+ ./bootstrap.sh --with-libraries=system,filesystem,thread,chrono,date_time,atomic
  cat > android-user-config.jam <<JAM
 using clang : android : "$TOOLCHAIN/aarch64-linux-android31-clang++" ;
 JAM
@@ -32,7 +32,7 @@ JAM
     --layout=system --stagedir="$BUILD_ROOT/stage" \
     cxxflags="-fPIC -D__ANDROID_API__=31" \
     linkflags="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
-    --with-system --with-filesystem --with-thread --with-chrono --with-date_time stage
+    --with-system --with-filesystem --with-thread --with-chrono --with-date_time --with-atomic stage
 )
 LIBDIR="$ROOT/third_party/openvins_mobile/thirdparty/boost/libs/arm64-v8a"
 test -d "$LIBDIR"
