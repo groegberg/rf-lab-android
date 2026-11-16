@@ -146,6 +146,13 @@ k=k.replace(marker,"""    private external fun getNativeDiagnosticsJNI(
     }
 
 """+marker,1)
+# The upstream floating HUD previously instructed continuous movement even
+# when the *static* initializer needs an initial stationary period.
+old_status='OpenVINS · INITIALISIERT NOCH · langsam seitwärts gehen'
+new_status='OpenVINS · INIT · zunächst 3–5 s ruhig halten'
+if k.count(old_status)!=1: raise RuntimeError("Old init HUD text missing")
+k=k.replace(old_status,new_status,1)
+
 needle='        // Calibration templates are unvalidated defaults.'
 if k.count(needle)!=1:raise RuntimeError("Runtime config patch anchor missing")
 k=k.replace(needle,needle+"""
