@@ -21,7 +21,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                        val da3Images:Int,val pairedImages:Int,val lostPairs:Int,
                        val lastDepth:android.graphics.Bitmap?,
                        val trajectory:OfflineVisualOdometry.Result?,
-                       val warnings:List<String>)
+                       val warnings:List<String>,
+                       val externalVio:List<ExternalVioTrajectory.Sample> = emptyList())
 
     companion object {
         fun closestIndex(poses:List<OfflineVisualOdometry.Pose>,
@@ -48,18 +49,34 @@ internal class OfflineReconstruction(private val context:android.content.Context
         val folder=File(session,"offline_$suffix")
         require(folder.mkdirs()){"Cannot create offline run"}
         val warnings=ArrayList<String>()
+        val external=ExternalVioTrajectory.read(session)
         var poses:OfflineVisualOdometry.Result?=null
-        try {
-            update("1/2 · OpenCV verfolgt Kamera und prüft IMU …")
-            poses=OfflineVisualOdometry().estimate(session,update)
-            File(folder,"relative_trajectory.json").writeText(
-                poses.json().toString(2))
-            warnings+=poses.warnings
-        }catch(t:Throwable){
-            val reason="Optische Odometrie nicht verfügbar: "+
-                (t.message?:t.javaClass.simpleName)
-            warnings+=reason
-            update(reason+" · KI-Fotos werden dennoch berechnet")
+        if(external.isNotEmpty()){
+            // The VIO is native OpenVINS MSCKF, not RF Lab's unit-step VO.
+            // Its calibration was not independently validated on the Pixel.
+            update("1/2 · Echte OpenVINS-VIO-Trajektorie importiert: "+
+                external.size+" Posen")
+            warnings+="Externe OpenVINS-Messung: native VIO-Kameraposen; "+
+                "Pixel-Kamera/IMU-Kalibrierung und Genauigkeit unvalidiert"
+            File(folder,"external_pose_summary.json").writeText(
+                JSONObject().put("source","OpenVINS native MSCKF VIO")
+                    .put("samples",external.size)
+                    .put("metric_calibration_validated",false)
+                    .put("loop_closure_optimized",false)
+                    .toString(2))
+        } else {
+            try {
+                update("1/2 · OpenCV verfolgt Kamera und prüft IMU …")
+                poses=OfflineVisualOdometry().estimate(session,update)
+                File(folder,"relative_trajectory.json").writeText(
+                    poses.json().toString(2))
+                warnings+=poses.warnings
+            }catch(t:Throwable){
+                val reason="Optische Odometrie nicht verfügbar: "+
+                    (t.message?:t.javaClass.simpleName)
+                warnings+=reason
+                update(reason+" · KI-Fotos werden dennoch berechnet")
+            }
         }
         val photos=PhotoSessionStore(context).frames(session)
         if(photos.isEmpty())warnings+="Keine hochauflösenden Fotos vorhanden"
@@ -81,10 +98,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         warnings+="DA3 Foto "+(i+1)+": "+(t.message?:"error")
                         continue
                     }
-                val position=closestIndex(poses?.poses?:emptyList(),
-                    photo.json.optLong("timestamp_ns"))
-                val matched=if(position>=0)poses!!.poses[position] else null
-                if(matched!=null)paired++
+                val ts=photo.json.optLong("timestamp_ns")
+                val position=if(external.isNotEmpty())
+                    ExternalVioTrajectory.closestIndex(external,ts)
+                    else closestIndex(poses?.poses?:emptyList(),ts)
+                val matched=if(external.isEmpty() && position>=0)
+                    poses?.poses?.getOrNull(position) else null
+                if(position>=0)paired++
                 // Store a dense relative-depth map as 16-bit normalized data.
                 // 0 means invalid; min/max in metadata restore model units.
                 val good=inference.relativeDepth.asSequence()
@@ -123,7 +143,16 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("inference_ms",inference.inferenceMs)
                     .put("crop_percent",inference.cropPercent.toDouble())
                     .put("optical_pose_index",position)
-                    .put("optical_pose_valid",matched?.accepted?:false)
+                    .put("optical_pose_valid",
+                        if(external.isNotEmpty()) position>=0
+                        else matched?.accepted?:false)
+                    .put("pose_source",if(external.isNotEmpty())
+                        "OpenVINS native MSCKF, unvalidated"
+                        else "OpenCV relative monocular VO")
+                    .put("external_camera_position_unvalidated",
+                        if(external.isNotEmpty() && position>=0)
+                            JSONArray(external[position].center().toList())
+                        else JSONObject.NULL)
                     .put("pose_metric",false))
                 last?.recycle()
                 last=inference.depthVisual.copy(
@@ -140,14 +169,20 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("input_photos",selected.size)
             .put("relative_units_only",true)
             .put("not_metric_or_fused",true)
-            .put("vo_status",if(poses==null)"unavailable" else "relative-only")
+            .put("vo_status",when{
+                external.isNotEmpty()->"OpenVINS native VIO, unvalidated"
+                poses!=null->"OpenCV relative-only"
+                else->"unavailable"
+            })
+            .put("external_vio_calibration_validated",false)
             .put("depth_maps",manifest)
             .put("warnings",JSONArray(warnings))
             .toString(2))
         update("Fertig: "+done+" KI-Tiefenkarten, "+
             paired+" Kamerapositionen zugeordnet")
-        return Summary(folder,poses?.poses?.size?:0,
+        return Summary(folder,
+            if(external.isNotEmpty()) external.size else poses?.poses?.size?:0,
             poses?.inliers?:0,done,paired,poses?.rejected?:0,
-            last,poses,warnings)
+            last,poses,warnings,external)
     }
 }
