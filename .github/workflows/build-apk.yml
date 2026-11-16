@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Set up Java
@@ -41,6 +41,8 @@ jobs:
           python3 tools/bootstrap_embedded_openvins.py
           test -f third_party/openvins_mobile/app/src/main/cpp/open_vins/ov_msckf/src/core/VioManager.cpp
           test -f third_party/openvins_mobile/LICENSE
+      - name: Rebuild Boost for 16 KiB ARM64 Android pages
+        run: bash tools/rebuild_boost_android_16k.sh
       - name: Test RF fingerprint localization
         run: gradle --stacktrace --no-daemon :app:testDebugUnitTest
       - name: Test Alexa message contract
@@ -56,6 +58,9 @@ jobs:
           sha256sum app/build/outputs/apk/debug/app-debug.apk
       - name: Check 16 KiB native ELF alignment (report warnings)
         run: python3 tools/check_elf_16k.py app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify 16 KiB APK native library zip alignment
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
