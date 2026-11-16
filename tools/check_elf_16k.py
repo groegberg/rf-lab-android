@@ -44,7 +44,7 @@ def main(apk):
         print("Cannot claim 16KiB device compatibility. Rebuild/replace these "
               "third-party binaries before deployment to a 16KiB-page Pixel.")
     else:print("All ARM64 PT_LOAD segments report >= 16 KiB alignment.")
-    return 0
+    return 1 if old and "--strict" in sys.argv[2:] else 0
 
 if __name__=="__main__":
     sys.exit(main(sys.argv[1]))
