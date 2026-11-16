@@ -4,7 +4,10 @@
 # true 16KiB page-size devices. Never claim compatibility for those binaries.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-NDK="${ANDROID_NDK_HOME:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}/ndk/28.2.13676358}"
+SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+test -n "$SDK" || { echo "ANDROID_HOME is required" >&2; exit 1; }
+# Ignore runner-preinstalled ANDROID_NDK_HOME: it may point to NDK r27.
+NDK="$SDK/ndk/28.2.13676358"
 TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 test -x "$TOOLCHAIN/aarch64-linux-android31-clang++" || {
     echo "Android NDK 26.3 toolchain missing: $TOOLCHAIN" >&2; exit 1;
