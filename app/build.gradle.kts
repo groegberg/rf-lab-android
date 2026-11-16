@@ -16,8 +16,8 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 23
-        versionName = "1.3.1-openvins-live-trail-dev"
+        versionCode = 24
+        versionName = "1.3.2-openvins-init-diagnostics-dev"
         // Pixel 10 Pro XL: bundle only 64-bit ARM native OpenCV/LiteRT.
         ndk { abiFilters += "arm64-v8a" }
     }
