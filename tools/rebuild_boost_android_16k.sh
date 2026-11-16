@@ -30,7 +30,7 @@ JAM
     binary-format=elf abi=aapcs threading=multi \
     variant=release link=shared runtime-link=shared \
     --layout=system --stagedir="$BUILD_ROOT/stage" \
-    cxxflags="-fPIC -D__ANDROID_API__=31" \
+    cxxflags="-fPIC -std=c++14 -D__ANDROID_API__=31" \
     linkflags="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
     --with-system --with-filesystem --with-thread --with-chrono --with-date_time --with-atomic stage
 )
