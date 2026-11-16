@@ -33,7 +33,21 @@ edit(cpp,
     """    mkdir((save_folder + "cam0/").c_str(), 0700);
     mkdir((save_folder + "rgb/").c_str(), 0700);
     last_gray_saved_ns.store(0);
-    last_rgb_saved_ns.store(0);""")
+    last_rgb_saved_ns.store(0);
+    // Snapshot precisely the config used by this capture for later
+    // camera/IMU calibration and uncertainty review.
+    mkdir((save_folder + "config/").c_str(), 0700);
+    for (const char* name : {"estimator_config.yaml",
+                             "kalibr_imu_chain.yaml",
+                             "kalibr_imucam_chain.yaml",
+                             "PIXEL_CALIBRATION_WARNING.txt"}) {
+      const std::string from = app_private_folder + "/config/" + name;
+      std::ifstream source(from, std::ios::binary);
+      if (source.is_open()) {
+        std::ofstream target(save_folder + "config/" + name, std::ios::binary);
+        target << source.rdbuf();
+      }
+    }""")
 edit(cpp,
     """    // Open our IMU csv file
     imu_csv.open(save_folder + "imu0.csv");
