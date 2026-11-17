@@ -86,6 +86,19 @@ internal object OpenVinsImageOrientation {
         return rotation
     }
 
+    /** OpenVINS defines t_imu = t_camera + t_offset, not minus.
+     *  The orientation of the IMU gravity samples must use the same clock
+     *  correction as the native VIO estimator to avoid roll/yaw skew.
+     */
+    fun imuTimestampNs(cameraTimestampNs:Long,
+                       cameraToImuOffsetSeconds:Double):Long?{
+        if(cameraTimestampNs<=0L || !cameraToImuOffsetSeconds.isFinite() ||
+            abs(cameraToImuOffsetSeconds)>.10)return null
+        val corrected=cameraTimestampNs+
+            (cameraToImuOffsetSeconds*1_000_000_000.0).toLong()
+        return if(corrected>0L)corrected else null
+    }
+
     fun estimate(imu:List<Imu>,timestampNs:Long,
                  camFromImu:DoubleArray,
                  windowNs:Long=220_000_000L):Estimate?{
