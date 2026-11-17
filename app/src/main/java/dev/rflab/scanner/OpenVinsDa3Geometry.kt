@@ -55,29 +55,43 @@ internal object OpenVinsDa3Geometry {
     }
 
     /**
-     * Pixel-center inverse of Da3DepthEngine.predictJpeg():
-     * landscape JPEG -> clockwise 90-degree bitmap rotation, then
-     * aspect-fill scaling with a centered crop to 504 x 896.
+     * Exact inverse of DA3's rotate+aspect-fill+center-crop pixel-center
+     * geometry. The native ImageReader JPEG stays in SENSOR coordinates,
+     * so physical device roll changes the requested model rotation, not K.
+     * Historical non-VIO callers retain their old rotation by default.
      */
     fun sourcePixel(modelX: Double, modelY: Double,
                     sourceWidth: Int, sourceHeight: Int,
-                    modelWidth: Int, modelHeight: Int): DoubleArray? {
+                    modelWidth: Int, modelHeight: Int,
+                    rotationDegrees: Int =
+                        if(sourceWidth>sourceHeight)90 else 0): DoubleArray? {
         if (sourceWidth <= 0 || sourceHeight <= 0 ||
             modelWidth <= 0 || modelHeight <= 0 ||
+            rotationDegrees !in listOf(0,90,180,270) ||
             !modelX.isFinite() || !modelY.isFinite()) return null
-        val rotated = sourceWidth > sourceHeight
-        val rw = if (rotated) sourceHeight else sourceWidth
-        val rh = if (rotated) sourceWidth else sourceHeight
-        val scale = max(modelWidth.toDouble() / rw, modelHeight.toDouble() / rh)
-        val left = (modelWidth - rw * scale) / 2.0
-        val top = (modelHeight - rh * scale) / 2.0
-        val rx = (modelX + .5 - left) / scale - .5
-        val ry = (modelY + .5 - top) / scale - .5
-        val x = if (rotated) ry else rx
-        val y = if (rotated) sourceHeight - 1.0 - rx else ry
-        if (x < 0.0 || y < 0.0 ||
-            x >= sourceWidth || y >= sourceHeight) return null
-        return doubleArrayOf(x, y)
+        val swapped=rotationDegrees==90 || rotationDegrees==270
+        val rw=if(swapped)sourceHeight else sourceWidth
+        val rh=if(swapped)sourceWidth else sourceHeight
+        val scale=max(modelWidth.toDouble()/rw,modelHeight.toDouble()/rh)
+        val left=(modelWidth-rw*scale)/2.0
+        val top=(modelHeight-rh*scale)/2.0
+        val rx=(modelX+.5-left)/scale-.5
+        val ry=(modelY+.5-top)/scale-.5
+        val x=when(rotationDegrees){
+            0->rx
+            90->ry
+            180->sourceWidth-1.0-rx
+            else->sourceWidth-1.0-ry
+        }
+        val y=when(rotationDegrees){
+            0->ry
+            90->sourceHeight-1.0-rx
+            180->sourceHeight-1.0-ry
+            else->rx
+        }
+        if(x<0.0 || y<0.0 ||
+            x>=sourceWidth || y>=sourceHeight)return null
+        return doubleArrayOf(x,y)
     }
 
     /** Un-distort the source pixel via iterative inverse Brown-Conrady. */
