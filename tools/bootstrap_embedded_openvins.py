@@ -64,6 +64,11 @@ def main() -> None:
         "patch_openvins_camera_calibration_audit.py"), str(SOURCE))
     run(sys.executable, str(PROJECT / "research" / "openvins_record_export_patch.py"),
         str(SOURCE))
+    # Export actual online camera intrinsics/extrinsics/time offset with
+    # each native pose. Re-using the original YAML for DA3 is incorrect after
+    # OpenVINS online calibration has started changing its filter state.
+    run(sys.executable, str(PROJECT / "tools" /
+        "patch_openvins_online_calibration_export.py"), str(SOURCE))
     # RF Lab's scanner subclasses the real native VIO activity, receiving
     # initialized MSCKF poses via callbacks without a second camera pipeline.
     run(sys.executable, str(PROJECT / "tools" / "patch_embedded_openvins_scan.py"),
