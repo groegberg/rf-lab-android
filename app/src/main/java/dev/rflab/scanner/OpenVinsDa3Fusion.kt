@@ -42,7 +42,8 @@ internal object OpenVinsDa3Fusion {
                 val d=inverse[v*w+u]
                 if(!d.isFinite() || d<=lowInverse || d>=highInverse)continue
                 val p=OpenVinsDa3Geometry.sourcePixel(
-                    u.toDouble(),v.toDouble(),sourceWidth,sourceHeight,w,h)
+                    u.toDouble(),v.toDouble(),sourceWidth,sourceHeight,
+                    w,h,prediction.rotationDegrees)
                     ?:continue
                 val world=OpenVinsDa3Geometry.mapPoint(pose,calibration,
                     p[0],p[1],sourceWidth,sourceHeight,1.0)?:continue
