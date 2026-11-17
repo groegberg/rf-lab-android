@@ -99,6 +99,7 @@ jobs:
           fixed focus and optical geometry for consistent RGB VIO;
           current OpenVINS online intrinsics/extrinsics/IMU time-shift per native pose;
           gravity-derived DA3 rotation 0/90/180/270 independent of locked UI;
+          online t_IMU=t_CAMERA+offset is applied when aligning gravity;
           strict closed-gate against non-calibrated/unstable colored 3D geometry;
           user-triggered Messdaten ZIP export for actual Pixel calibration.
           IMPORTANT: This is NOT a device-certified metric camera/IMU calibration.
