@@ -3,11 +3,23 @@ name: Build RF Lab APK
 on:
   push:
     branches: [main, feature/mobile-rgbd-v0.6, feature/ondevice-surface-v0.7, feature/mobile-quality-ui-v0.8, feature/depth-methods-v0.9, feature/camera2-capture-v1.0, fix/android-systembar-insets-v1.0.1, feature/offline-vio-da3-v1.1, experiment/openvins-live-vio-v1.2, feature/embedded-openvins-v1.3]
+    paths-ignore:
+      - '.github/workflows/cleanup-actions-storage.yml'
+      - '.github/scripts/cleanup_actions_storage.py'
   pull_request:
+    paths-ignore:
+      - '.github/workflows/cleanup-actions-storage.yml'
+      - '.github/scripts/cleanup_actions_storage.py'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Each push obsoletes the previous build of the same branch; don't finish
+# expensive native NDK/APK builds which are no longer the latest tested source.
+concurrency:
+  group: rf-lab-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -64,8 +76,12 @@ jobs:
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
+        # PR and branch push used to upload duplicate 97 MB APKs per commit.
+        # PR tests continue; only branch builds publish temporary APK artifacts.
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: RF-Lab-Pixel10-Debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 2

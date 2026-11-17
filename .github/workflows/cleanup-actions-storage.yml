@@ -1,0 +1,28 @@
+name: Reclaim GitHub Actions artifact storage
+
+on:
+  push:
+    branches: [feature/embedded-openvins-v1.3]
+    paths:
+      - '.github/workflows/cleanup-actions-storage.yml'
+      - '.github/scripts/cleanup_actions_storage.py'
+  workflow_dispatch:
+
+# The actions token grants deletion of *Actions artifacts only*.
+# This workflow never deletes GitHub Release assets, Git data or build logs.
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup-obsolete-android-build-artifacts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit and delete obsolete RF Lab / OpenVINS temporary APK artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLEANUP_KEEP_LATEST_PER_NAME: '2'
+          CLEANUP_MIN_AGE_MINUTES: '20'
+        run: python3 .github/scripts/cleanup_actions_storage.py
