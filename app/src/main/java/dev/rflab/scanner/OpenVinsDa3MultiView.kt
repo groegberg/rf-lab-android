@@ -144,10 +144,10 @@ internal object OpenVinsDa3MultiView {
                         matcher.knnMatch(a.descriptors,b.descriptors,forward,2)
                         matcher.knnMatch(b.descriptors,a.descriptors,reverse,2)
                         val reciprocal=HashMap<Int,Int>()
-                        reverse.forEachIndexed{query,group->
+                        reverse.forEach{group->
                             val m=group.toArray()
                             if(m.size>=2 && m[0].distance<.72f*m[1].distance)
-                                reciprocal[query]=m[0].trainIdx
+                                reciprocal[m[0].queryIdx]=m[0].trainIdx
                         }
                         forward.forEach{group->
                             val m=group.toArray()
