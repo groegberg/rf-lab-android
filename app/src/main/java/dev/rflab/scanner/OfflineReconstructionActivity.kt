@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.graphics.drawable.GradientDrawable
@@ -31,6 +32,8 @@ class OfflineReconstructionActivity:Activity() {
     private lateinit var details:TextView
     private lateinit var calculate:Button
     private lateinit var trajectory:RelativeTrajectoryView
+    private lateinit var cloud:ScanCloudView
+    private lateinit var mapToggle:Button
     private lateinit var depth:ImageView
     private var running=false
 
@@ -75,14 +78,24 @@ class OfflineReconstructionActivity:Activity() {
         toolbar.addView(title,LinearLayout.LayoutParams(0,dp(48),1f))
         root.addView(toolbar)
         val description=TextView(this).apply{
-            text="OpenCV: echte Bildkorrespondenzen und relative Posen\n"+
+            text=if(ExternalVioTrajectory.read(session).isNotEmpty())
+                "OpenVINS: native VIO-Kameraposen + RGB-Zeitstempel\n"+
+                "Depth Anything 3: farbige, RELATIVE 3D-Punkte (nicht vermessen)"
+            else "OpenCV: echte Bildkorrespondenzen und relative Posen\n"+
                 "Depth Anything 3: dichte KI-Tiefe, noch ohne metrischen Maßstab"
             textSize=11f;setTextColor(Color.rgb(190,222,229))
             setPadding(dp(7),dp(5),dp(7),dp(7))
         }
         root.addView(description)
+        val views=FrameLayout(this)
         trajectory=RelativeTrajectoryView(this)
-        root.addView(trajectory,LinearLayout.LayoutParams(-1,0,.45f))
+        views.addView(trajectory,FrameLayout.LayoutParams(-1,-1))
+        cloud=ScanCloudView(this).apply {
+            visibility=View.GONE
+            showCameraColors=true
+        }
+        views.addView(cloud,FrameLayout.LayoutParams(-1,-1))
+        root.addView(views,LinearLayout.LayoutParams(-1,0,.45f))
         depth=ImageView(this).apply{
             scaleType=ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.rgb(17,33,47))
@@ -96,6 +109,14 @@ class OfflineReconstructionActivity:Activity() {
             setPadding(dp(9),dp(11),dp(9),dp(9))
         }
         root.addView(details)
+        mapToggle=button("3D-Farbkarte / Kamerapfad") {
+            val show=cloud.visibility!=View.VISIBLE
+            cloud.visibility=if(show)View.VISIBLE else View.GONE
+            trajectory.visibility=if(show)View.GONE else View.VISIBLE
+        }.apply{isEnabled=false}
+        root.addView(mapToggle,LinearLayout.LayoutParams(-1,dp(44)).apply{
+            bottomMargin=dp(5)
+        })
         calculate=button("Offline berechnen",true){start()}
         root.addView(calculate,LinearLayout.LayoutParams(-1,dp(55)))
         root.addView(button("Aufnahmeserie / Export öffnen"){
@@ -110,7 +131,11 @@ class OfflineReconstructionActivity:Activity() {
         running=true
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         calculate.isEnabled=false
-        details.text="Optische Rekonstruktion wird ausgeführt …"
+        mapToggle.isEnabled=false
+        cloud.visibility=View.GONE
+        cloud.store=null
+        trajectory.visibility=View.VISIBLE
+        details.text="OpenVINS / Depth Anything 3 wird offline verarbeitet …"
         executor.execute{
             try{
                 val result=OfflineReconstruction(applicationContext)
@@ -126,6 +151,13 @@ class OfflineReconstructionActivity:Activity() {
                     }
                     trajectory.poses=result.trajectory?.poses?:emptyList()
                     trajectory.externalPoses=result.externalVio
+                    if(result.fusedPoints>=50){
+                        cloud.store=RoomScanStore(this,
+                            "rflab_openvins_scan_v1.json")
+                        cloud.visibility=View.VISIBLE
+                        trajectory.visibility=View.GONE
+                        mapToggle.isEnabled=true
+                    }
                     result.lastDepth?.let{depth.setImageBitmap(it)}
                     title.text="OFFLINE · ERGEBNIS"
                     details.text=if(result.externalVio.isNotEmpty()){
@@ -135,12 +167,14 @@ class OfflineReconstructionActivity:Activity() {
                         result.da3Images.toString()+" DA3-Bilder · "+
                             diag.matchedPhotos+"/"+diag.photoCount+
                             " Fotos mit VIO-Pose\n"+
+                            result.fusedPoints+" echte RGB-Farbpunkte aus "+
+                            result.fusedFrames+" Keyframes\n"+
                             String.format(java.util.Locale.GERMANY,
                                 "%.1f Posen/s · max. Lücke %.0f ms",
                                 diag.poseRateHz,diag.maxPoseGapMs)+"\n"+
-                            "Kalibrierung ungeprüft · keine Loop Closure"+
-                            if(diag.warnings.isNotEmpty())
-                                "\n⚠ "+diag.warnings.first() else ""
+                            "Relativer Tiefenmaßstab · keine kalibrierte Raumkarte"+
+                            if(result.fusedPoints==0 && result.warnings.isNotEmpty())
+                                "\n⚠ "+result.warnings.last() else ""
                     }else{
                         result.da3Images.toString()+
                             " DA3-Bilder · "+result.pairedImages+
