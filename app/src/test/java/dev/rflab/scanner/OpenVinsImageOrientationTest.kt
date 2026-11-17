@@ -45,6 +45,19 @@ class OpenVinsImageOrientationTest {
         assertFalse(report.usableForFusion)
     }
 
+    @Test fun usesOpenVinsPositiveImuTimeOffsetConvention(){
+        // OpenVINS: t_IMU = t_CAMERA + dt. The opposite sign would
+        // misassociate the accelerometer on device roll transitions.
+        assertEquals(1_018_000_000L,
+            OpenVinsImageOrientation.imuTimestampNs(
+                1_000_000_000L,.018))
+        assertEquals(982_000_000L,
+            OpenVinsImageOrientation.imuTimestampNs(
+                1_000_000_000L,-.018))
+        assertNull(OpenVinsImageOrientation.imuTimestampNs(
+            1_000_000_000L,.25))
+    }
+
     @Test fun parsesCameraFromImuTransformAndRejectsReflections() {
         val yaml="""
             cam0:
