@@ -328,6 +328,25 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         }
     }
 
+    /** Native captures copy the YAML at session start. Add the Camera2
+     *  capture-result evidence AFTER recording stops, so a lens switch or
+     *  optical/focus drift late in the scan is never silently forgotten.
+     *  This file is diagnostic only; it cannot prove Kalibr accuracy.
+     */
+    private fun snapshotCameraAudit() {
+        val root=getExternalFilesDir(null) ?: return
+        val original=File(root,"config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+        if(!original.isFile || original.length() !in 40..128_000)return
+        val native=File(root,"sessions").listFiles()
+            ?.filter{it.isDirectory &&
+                File(it,"vio_camera_trajectory.csv").isFile}
+            ?.maxByOrNull{File(it,"vio_camera_trajectory.csv").lastModified()}
+            ?:return
+        val config=File(native,"config").apply{mkdirs()}
+        original.copyTo(File(config,"PIXEL_CAMERA_CAPTURE_EVIDENCE.txt"),
+            overwrite=true)
+    }
+
     private fun cameraDiagnostics(): String = try {
         val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val cameraId = manager.cameraIdList.firstOrNull {
@@ -353,7 +372,12 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             " · intrinsic_available=" + (intrinsic != null) + "\n" +
             "Camera2 calibration seed file=" + calibration.exists() + "\n" +
             (if(calibration.isFile)calibration.readText().take(750) else
-                "No Camera2 calibration seed found: old/unvalidated config may be in use")
+                "No Camera2 calibration seed found: old/unvalidated config may be in use")+
+            "\nCamera2 CaptureResult audit:\n"+
+            (File(getExternalFilesDir(null),
+                "config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+                .takeIf{it.isFile}?.readText()?.take(1400)
+                ?: "Keine tatsächlichen Camera2-CaptureResult-Daten vorhanden")
     } catch (e: Exception) {
         "Camera2 metadata unavailable: " + (e.message ?: "unknown")
     }
@@ -390,6 +414,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         recording = false
         try {
             stopEmbeddedScan()
+            snapshotCameraAudit()
             scan.save()
             // Retain the actual native queue/IMU counters even when no pose
             // was initialized. No Logcat/ADB access is needed to investigate.
