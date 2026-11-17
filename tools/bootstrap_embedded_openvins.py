@@ -57,6 +57,11 @@ def main() -> None:
     # the validated standalone GPLv3 research build, never a mock VIO engine.
     run(sys.executable, str(PROJECT / "research" / "openvins_pixel_test_patch.py"),
         str(SOURCE))
+    # Before recording and embedding the GPLv3 activity, pin Camera2 lens
+    # state (focus, distortion, zoom) and audit ACTUAL capture metadata.
+    # Display orientation never alters unrotated ImageReader sensor pixels.
+    run(sys.executable, str(PROJECT / "tools" /
+        "patch_openvins_camera_calibration_audit.py"), str(SOURCE))
     run(sys.executable, str(PROJECT / "research" / "openvins_record_export_patch.py"),
         str(SOURCE))
     # RF Lab's scanner subclasses the real native VIO activity, receiving
