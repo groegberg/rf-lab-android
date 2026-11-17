@@ -136,6 +136,20 @@ internal class OfflineReconstruction(private val context:android.content.Context
         if(external.isNotEmpty() && cameraCalibration==null)
             warnings+="Für OpenVINS/DA3 keine verlässliche Kamera-Geometrie; "+
                 "keine ungeprüften Farbflächen erzeugt"
+        // Native ImageReader JPEGs are sensor-coordinate pixels. Align DA3
+        // input orientation using measured IMU gravity and the recorded
+        // camera<-IMU extrinsic, NEVER the landscape-locked UI orientation.
+        val imu=if(external.isNotEmpty())
+            OpenVinsImageOrientation.readImu(session) else emptyList()
+        val rotationMatrix=if(external.isNotEmpty())
+            File(session,"external_calibration/kalibr_imucam_chain.yaml")
+                .takeIf{it.isFile}?.let{
+                    OpenVinsImageOrientation.camFromImu(it.readText())
+                } else null
+        if(external.isNotEmpty() &&
+            (imu.isEmpty() || rotationMatrix==null))
+            warnings+="IMU-Schwerkraft bzw. T_cam_imu nicht verfügbar: "+
+                "Bildausrichtung ungesichert; DA3-Vorschau ohne 3D-Fusion"
         val candidateFeatures=ArrayList<OpenVinsDa3MultiView.Frame>()
         val candidateRays=HashMap<Int,List<OpenVinsDa3Fusion.RaySample>>()
         var fusedFrames=0
@@ -147,15 +161,22 @@ internal class OfflineReconstruction(private val context:android.content.Context
             for((i,photo) in selected.withIndex()){
                 update("2/2 · Depth Anything 3 "+(i+1)+"/"+selected.size)
                 val jpeg=photo.jpeg.readBytes()
+                val ts=photo.json.optLong("timestamp_ns")
+                val imageOrientation=rotationMatrix?.let{
+                    OpenVinsImageOrientation.estimate(imu,ts,it)
+                }
                 val engine=ai?:Da3DepthEngine(context.applicationContext).also{
                     ai=it
                 }
-                val inference=try{engine.predictJpeg(jpeg)}
+                // The old fixed +90 rotation remains preview-only when the
+                // IMU cannot provide a reliable upright direction.
+                val inference=try{
+                    engine.predictJpeg(jpeg,imageOrientation?.degrees)
+                }
                     catch(t:Throwable){
                         warnings+="DA3 Foto "+(i+1)+": "+(t.message?:"error")
                         continue
                     }
-                val ts=photo.json.optLong("timestamp_ns")
                 val position=if(external.isNotEmpty())
                     ExternalVioTrajectory.closestIndex(external,ts)
                     else closestIndex(poses?.poses?:emptyList(),ts)
@@ -177,6 +198,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // After all DA3 frames have run, fit inverse-depth scale/shift
                 // from triangulated native VIO camera baselines.
                 if(cameraCalibration!=null && external.isNotEmpty() &&
+                    imageOrientation?.usableForFusion==true &&
+                    inference.cropPercent<.70f &&
                     position>=0 && good.size>=100){
                     try {
                         val bounds=android.graphics.BitmapFactory.Options().apply{
@@ -189,7 +212,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                             val frame=OpenVinsDa3MultiView.extract(i,
                                 inference.image,inference.relativeDepth,
                                 external[position],cameraCalibration,
-                                bounds.outWidth,bounds.outHeight)
+                                bounds.outWidth,bounds.outHeight,
+                                inference.rotationDegrees)
                             if(frame!=null){
                                 candidateFeatures.add(frame)
                                 val rays=OpenVinsDa3Fusion.sampleUnscaled(
@@ -234,6 +258,15 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("backend",inference.accelerator)
                     .put("inference_ms",inference.inferenceMs)
                     .put("crop_percent",inference.cropPercent.toDouble())
+                    .put("gravity_upright_rotation_degrees",
+                        imageOrientation?.degrees ?: JSONObject.NULL)
+                    .put("gravity_alignment_error_degrees",
+                        imageOrientation?.errorDegrees ?: JSONObject.NULL)
+                    .put("imu_gravity_samples",imageOrientation?.samples ?: 0)
+                    .put("gravity_orientation_safe_for_fusion",
+                        imageOrientation?.usableForFusion ?: false)
+                    .put("da3_actual_rotation_degrees",
+                        inference.rotationDegrees)
                     .put("optical_pose_index",position)
                     .put("optical_pose_valid",
                         if(external.isNotEmpty()) position>=0
