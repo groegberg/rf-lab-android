@@ -53,6 +53,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private lateinit var processButton: Button
     private val worker = Executors.newSingleThreadExecutor()
     private var recording = false
+    private var pendingCalibrationExport: File? = null
     private var nativePoseSeen = false
     private var lastUiNs = 0L
     private var lastSavedNs = 0L
@@ -190,10 +191,19 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         controls.addView(processButton,
             LinearLayout.LayoutParams(0, dp(50), 1.25f))
         root.addView(controls)
-        root.addView(button("Diagnose anzeigen / kopieren") { showDiagnostics() },
-            LinearLayout.LayoutParams(-1, dp(39)).apply {
-                topMargin = dp(5)
+        val diagnosticControls=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+        }
+        diagnosticControls.addView(button("Diagnose"){showDiagnostics()},
+            LinearLayout.LayoutParams(0,dp(39),1f).apply{
+                rightMargin=dp(5)
             })
+        diagnosticControls.addView(
+            button("Messdaten ZIP"){requestCalibrationExport()},
+            LinearLayout.LayoutParams(0,dp(39),1f))
+        root.addView(diagnosticControls,
+            LinearLayout.LayoutParams(-1,dp(39)).apply{topMargin=dp(5)})
 
         setContentView(root)
         SystemBarsSafeArea.install(this, root)
@@ -406,6 +416,60 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                     ClipData.newPlainText("RF Lab OpenVINS diagnostics", body))
                 Toast.makeText(this, "Diagnose kopiert", Toast.LENGTH_SHORT).show()
             }.show()
+    }
+
+    private fun requestCalibrationExport() {
+        if(recording)stopCapture()
+        if(recording)return
+        val root=File(getExternalFilesDir(null),"sessions")
+        val latest=OpenVinsCalibrationArchive.latest(root)
+        if(latest==null){
+            Toast.makeText(this,"Keine native OpenVINS-Aufnahme vorhanden",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingCalibrationExport=latest
+        val intent=Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/zip")
+            .putExtra(Intent.EXTRA_TITLE,"RF-Lab-OpenVINS-Kalibrierung-"+
+                latest.name+".zip")
+        startActivityForResult(intent,7032)
+    }
+
+    @Deprecated("SAF document picker callback for a user-selected export")
+    override fun onActivityResult(
+        requestCode:Int,resultCode:Int,data:Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode!=7032)return
+        val session=pendingCalibrationExport
+        pendingCalibrationExport=null
+        if(resultCode!=RESULT_OK || session==null)return
+        val uri=data?.data?:return
+        val report=diagnosticReport()
+        stateLabel.text="Messdaten werden als ZIP exportiert …"
+        worker.execute {
+            try {
+                val result=contentResolver.openOutputStream(uri)?.use { stream ->
+                    OpenVinsCalibrationArchive.export(session,stream,report)
+                } ?:error("Kein Zielspeicher für Messdaten")
+                runOnUiThread {
+                    if(!isFinishing && !isDestroyed){
+                        stateLabel.text="✓ OpenVINS-Messdaten exportiert: "+
+                            result.files+" Dateien"
+                        Toast.makeText(this,"IMU/Kamera/Kalibrierung ZIP gespeichert",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch(t:Throwable) {
+                runOnUiThread {
+                    if(!isFinishing && !isDestroyed){
+                        stateLabel.text="Kalibrierungs-Export fehlgeschlagen: "+
+                            (t.message?:t.javaClass.simpleName)
+                    }
+                }
+            }
+        }
     }
 
     private fun stopCapture() {
