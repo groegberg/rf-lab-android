@@ -116,8 +116,38 @@ internal class OfflineReconstruction(private val context:android.content.Context
         }.distinctBy { it.jpeg.name }
         val cameraEvidence=if(external.isNotEmpty())
             OpenVinsCameraEvidence.read(session) else null
-        val cameraCalibration=if(cameraEvidence?.allowedForExperimentalFusion==true)
+        val initialCalibration=if(external.isNotEmpty())
             OpenVinsDa3Fusion.calibration(session) else null
+        val onlineQuality=if(external.isNotEmpty())
+            OpenVinsOnlineCalibrationHealth.inspect(external,initialCalibration)
+            else null
+        if(onlineQuality!=null){
+            File(folder,"openvins_online_calibration_audit.json").writeText(JSONObject()
+                .put("source","Native OpenVINS camera state at each VIO timestamp")
+                .put("online_state_count",onlineQuality.samples)
+                .put("settled_for_experimental_fusion",
+                    onlineQuality.acceptedForExperimentalFusion)
+                .put("max_focal_variation_percent",
+                    onlineQuality.maxFocalVariationPercent)
+                .put("max_extrinsic_rotation_variation_degrees",
+                    onlineQuality.maxExtrinsicRotationVariationDegrees)
+                .put("max_extrinsic_translation_variation",
+                    onlineQuality.maxExtrinsicTranslationVariation)
+                .put("max_time_offset_variation_ms",
+                    onlineQuality.maxTimeOffsetVariationMs)
+                .put("median_time_offset_ms",
+                    onlineQuality.medianTimeOffsetMs)
+                .put("metric_calibration_verified",false)
+                .put("rejection_reasons",JSONArray(onlineQuality.reasons))
+                .toString(2))
+            if(!onlineQuality.acceptedForExperimentalFusion)
+                warnings+="OpenVINS-Online-Kalibrierung nicht stabil genug: "+
+                    onlineQuality.reasons.take(3).joinToString(" · ")
+        }
+        val cameraCalibration=if(
+            cameraEvidence?.allowedForExperimentalFusion==true &&
+            onlineQuality?.acceptedForExperimentalFusion==true)
+            initialCalibration else null
         if(cameraEvidence!=null){
             File(folder,"camera_geometry_audit.json").writeText(JSONObject()
                 .put("source","real Camera2 CaptureResult and saved OpenVINS YAML")
@@ -414,6 +444,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("native_pose_calibration_verified",false)
                 .put("camera_geometry_capture_result_gate_passed",
                     cameraEvidence?.allowedForExperimentalFusion?:false)
+                .put("online_calibration_stable",
+                    onlineQuality?.acceptedForExperimentalFusion?:false)
                 .put("metric_accuracy_verified",false)
                 .put("loop_closure",false)
                 .put("mesh",false)
@@ -432,6 +464,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("multiview_triangulations",triangulatedFeatures)
             .put("camera_geometry_gate_passed",
                 cameraEvidence?.allowedForExperimentalFusion?:false)
+            .put("online_calibration_stable",
+                onlineQuality?.acceptedForExperimentalFusion?:false)
             .put("metric_dimensions_valid",false)
             .put("vo_status",when{
                 external.isNotEmpty()->"OpenVINS native VIO, unvalidated"
