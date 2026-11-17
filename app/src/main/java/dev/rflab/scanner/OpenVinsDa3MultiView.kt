@@ -47,7 +47,8 @@ internal object OpenVinsDa3MultiView {
         modelInput:Bitmap, modelDepth:FloatArray,
         sample:ExternalVioTrajectory.Sample,
         calibration:OpenVinsDa3Geometry.Calibration,
-        sourceWidth:Int,sourceHeight:Int
+        sourceWidth:Int,sourceHeight:Int,
+        rotationDegrees:Int
     ):Frame? {
         if(!calibration.compatibleWith(sourceWidth,sourceHeight) ||
             modelInput.width!=Da3DepthEngine.WIDTH ||
@@ -85,7 +86,7 @@ internal object OpenVinsDa3MultiView {
                     else {
                         val pixel=OpenVinsDa3Geometry.sourcePixel(
                             u,v,sourceWidth,sourceHeight,modelInput.width,
-                            modelInput.height)
+                            modelInput.height,rotationDegrees)
                         val projected=pixel?.let{
                             OpenVinsDa3Geometry.mapPoint(sample,calibration,
                                 it[0],it[1],sourceWidth,sourceHeight,1.0)
@@ -95,7 +96,7 @@ internal object OpenVinsDa3MultiView {
                                 projected[i]-origin[i]
                             }
                             val distance=norm(direction)
-                            if(distance<1.0 || !distance.isFinite())null
+                            if(distance<.98 || !distance.isFinite())null
                             else Feature(inverse,
                                 (u+.5)/modelInput.width,
                                 (v+.5)/modelInput.height,
