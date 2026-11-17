@@ -114,11 +114,28 @@ internal class OfflineReconstruction(private val context:android.content.Context
         val selected=if(photos.size<=24)photos else (0 until 24).map { i ->
             photos[i * (photos.size-1) / 23]
         }.distinctBy { it.jpeg.name }
-        val cameraCalibration=if(external.isNotEmpty())
+        val cameraEvidence=if(external.isNotEmpty())
+            OpenVinsCameraEvidence.read(session) else null
+        val cameraCalibration=if(cameraEvidence?.allowedForExperimentalFusion==true)
             OpenVinsDa3Fusion.calibration(session) else null
+        if(cameraEvidence!=null){
+            File(folder,"camera_geometry_audit.json").writeText(JSONObject()
+                .put("source","real Camera2 CaptureResult and saved OpenVINS YAML")
+                .put("experimental_fusion_gate",cameraEvidence.allowedForExperimentalFusion)
+                .put("metric_calibration_verified",false)
+                .put("camera_id",cameraEvidence.cameraId ?: JSONObject.NULL)
+                .put("capture_result_count",cameraEvidence.testedFrames)
+                .put("camera_metadata",JSONObject(cameraEvidence.metrics))
+                .put("rejection_reasons",JSONArray(cameraEvidence.problems))
+                .toString(2))
+            if(!cameraEvidence.allowedForExperimentalFusion)
+                warnings+="3D-Karte aus Qualitätsgründen gesperrt; "+
+                    "DA3 und VIO bleiben verfügbar: "+
+                    cameraEvidence.problems.take(3).joinToString(" · ")
+        }
         if(external.isNotEmpty() && cameraCalibration==null)
-            warnings+="Keine passende gespeicherte OpenVINS-Pinhole/Radtan-Kalibrierung: "+
-                "DA3-Tiefenkarten bleiben erhalten, aber keine 3D-Punkte projiziert"
+            warnings+="Für OpenVINS/DA3 keine verlässliche Kamera-Geometrie; "+
+                "keine ungeprüften Farbflächen erzeugt"
         val candidateFeatures=ArrayList<OpenVinsDa3MultiView.Frame>()
         val candidateRays=HashMap<Int,List<OpenVinsDa3Fusion.RaySample>>()
         var fusedFrames=0
@@ -335,6 +352,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("depth_kind","affine-invariant inverse depth")
                 .put("multiview_scale_shift_aligned",alignedFrames>=2)
                 .put("native_pose_calibration_verified",false)
+                .put("camera_geometry_capture_result_gate_passed",
+                    cameraEvidence?.allowedForExperimentalFusion?:false)
                 .put("metric_accuracy_verified",false)
                 .put("loop_closure",false)
                 .put("mesh",false)
@@ -351,6 +370,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("fused_keyframes",fusedFrames)
             .put("multiview_depth_aligned_keyframes",alignedFrames)
             .put("multiview_triangulations",triangulatedFeatures)
+            .put("camera_geometry_gate_passed",
+                cameraEvidence?.allowedForExperimentalFusion?:false)
             .put("metric_dimensions_valid",false)
             .put("vo_status",when{
                 external.isNotEmpty()->"OpenVINS native VIO, unvalidated"
