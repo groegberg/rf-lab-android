@@ -25,19 +25,30 @@ Die Analyse des gepinnten nativen Projekts und RF-Lab-Codes zeigte:
    `calib_cam_extrinsics` und `calib_cam_timeoffset` aktiviert;
    die 3D-Nachverarbeitung nutzte bislang die **Kamera-Seed-YAML**,
    nicht die nachoptimierten OpenVINS-Parameter zur jeweiligen Pose.
-4. Der native `ImageReader` liefert Rohsensorpixel in der festen
+4. In der nativen OpenVINS-Android-Brücke wurde für chroma
+   `pixelStride==2` pauschal NV21 angenommen. Android
+   `YUV_420_888` lässt U/V-Plane-Speicherlayout und Row-Stride offen.
+   Dadurch konnte es zu Rot-/Blau-Verwechslung und verändertem
+   Graubild für Feature Tracking kommen. Die ältere
+   `pixelStride==1`-Umwandlung hatte außerdem eine fehlerhafte ROI
+   außerhalb des reservierten I420-Puffers.
+5. Der native `ImageReader` liefert Rohsensorpixel in der festen
    Kamerakoordinatenbasis. Die Android-Activity ist auf Querformat
    fixiert; die physische Drehung des Handys um 90° ändert die
    Sensorgeometrie, **nicht** das gespeicherte Pixelkoordinatensystem.
    DA3-Small nimmt hingegen ein Hochformatbild (504×896). Es wurde
    *jedes* breite Foto starr um +90° gedreht. Damit war DA3 bei
    bestimmten physischen Telefonorientierungen um 90°/180° verdreht.
-5. Frühere Builds erzeugten aus unvalidierten Kamera-/IMU-Seedwerten
+6. Frühere Builds erzeugten aus unvalidierten Kamera-/IMU-Seedwerten
    kolorierte 3D-Wolken, obwohl Map-to-World-Korrektheit
    nicht ausreichend geprüft war.
 
 ## Korrekturen und neue Quality Gates
 
+- Native Camera2 YUV-Konvertierung: für beide Chroma-`pixelStride`-Modi
+  Y, U und V getrennt unter Beachtung der tatsächlichen `rowStride`
+  und `pixelStride` lesen und zu korrekt gepacktem I420 konvertieren.
+  Bildreihenfolge und Zeitstempel bleiben unverändert.
 - In der gepinnten nativen Camera2-Pipeline: Autofokus deaktivieren und
   Fokus für jede Aufnahmeserie festsetzen; OIS/EIS ausschalten,
   Distortion-Correction OFF anfordern, Zoom 1x.
