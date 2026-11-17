@@ -20,9 +20,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # Explicit user-requested quota cleanup; keep newest APK artifact per name.
       - name: Audit and delete obsolete RF Lab / OpenVINS temporary APK artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          CLEANUP_KEEP_LATEST_PER_NAME: '2'
+          CLEANUP_KEEP_LATEST_PER_NAME: '1'
           CLEANUP_MIN_AGE_MINUTES: '20'
         run: python3 .github/scripts/cleanup_actions_storage.py
