@@ -38,7 +38,7 @@ class OpenVinsOnlineCalibrationHealthTest {
         val r=OpenVinsOnlineCalibrationHealth.inspect(
             trajectory(focal={500.0+it*1.0}),seed)
         assertFalse(r.acceptedForExperimentalFusion)
-        assertTrue(r.reasons.any{it.contains("Brennweite")})
+        assertTrue(r.reasons.any{it.contains("brennweite",ignoreCase=true)})
     }
 
     @Test fun cameraImuExtrinsicRotationMustConverge(){
