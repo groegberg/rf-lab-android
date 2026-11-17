@@ -174,7 +174,11 @@ class OfflineReconstructionActivity:Activity() {
                                 diag.poseRateHz,diag.maxPoseGapMs)+"\n"+
                             "Relativer Tiefenmaßstab · keine kalibrierte Raumkarte"+
                             if(result.fusedPoints==0 && result.warnings.isNotEmpty())
-                                "\n⚠ "+result.warnings.last() else ""
+                                "\n⚠ "+(result.warnings.firstOrNull{
+                                    it.contains("gesperrt") ||
+                                    it.contains("Kalibrierung") ||
+                                    it.contains("Ausrichtung")
+                                }?:result.warnings.last()).take(260) else ""
                     }else{
                         result.da3Images.toString()+
                             " DA3-Bilder · "+result.pairedImages+
