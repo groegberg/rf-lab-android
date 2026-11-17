@@ -31,9 +31,27 @@ jobs:
           set -euo pipefail
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;28.2.13676358" "cmake;3.18.1"
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
+      # Previous release runner failed before checkout because the Gradle
+      # composite action tarball timed out from codeload.github.com.
+      # Fetch the official Gradle 8.13 distribution and verify its SHA256
+      # instead, avoiding dependency on a third-party action download.
+      - name: Install verified Gradle 8.13 (no GitHub action tarball)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          mkdir -p "$RUNNER_TEMP/rflab-gradle"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 500 \
+            "$base" -o "$RUNNER_TEMP/rflab-gradle/gradle.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 120 \
+            "$base.sha256" -o "$RUNNER_TEMP/rflab-gradle/gradle.sha256"
+          (cd "$RUNNER_TEMP/rflab-gradle" && \
+            echo "$(cat gradle.sha256)  gradle.zip" | sha256sum --check)
+          unzip -q "$RUNNER_TEMP/rflab-gradle/gradle.zip" \
+            -d "$RUNNER_TEMP/rflab-gradle"
+          echo "$RUNNER_TEMP/rflab-gradle/gradle-8.13/bin" >> "$GITHUB_PATH"
       - name: Prepare pinned real native GPLv3 OpenVINS and 16 KiB libraries
         run: |
           set -euo pipefail
