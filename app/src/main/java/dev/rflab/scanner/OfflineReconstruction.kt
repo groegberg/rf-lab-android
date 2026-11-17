@@ -121,6 +121,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
         val onlineQuality=if(external.isNotEmpty())
             OpenVinsOnlineCalibrationHealth.inspect(external,initialCalibration)
             else null
+        // JSONObject rejects NaN/Infinity; missing old online states must
+        // remain a readable JSON diagnostic instead of aborting inference.
+        fun safeNumber(value:Double):Any =
+            if(value.isFinite())value else JSONObject.NULL
         if(onlineQuality!=null){
             File(folder,"openvins_online_calibration_audit.json").writeText(JSONObject()
                 .put("source","Native OpenVINS camera state at each VIO timestamp")
@@ -128,15 +132,15 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("settled_for_experimental_fusion",
                     onlineQuality.acceptedForExperimentalFusion)
                 .put("max_focal_variation_percent",
-                    onlineQuality.maxFocalVariationPercent)
+                    safeNumber(onlineQuality.maxFocalVariationPercent))
                 .put("max_extrinsic_rotation_variation_degrees",
-                    onlineQuality.maxExtrinsicRotationVariationDegrees)
+                    safeNumber(onlineQuality.maxExtrinsicRotationVariationDegrees))
                 .put("max_extrinsic_translation_variation",
-                    onlineQuality.maxExtrinsicTranslationVariation)
+                    safeNumber(onlineQuality.maxExtrinsicTranslationVariation))
                 .put("max_time_offset_variation_ms",
-                    onlineQuality.maxTimeOffsetVariationMs)
+                    safeNumber(onlineQuality.maxTimeOffsetVariationMs))
                 .put("median_time_offset_ms",
-                    onlineQuality.medianTimeOffsetMs)
+                    safeNumber(onlineQuality.medianTimeOffsetMs))
                 .put("metric_calibration_verified",false)
                 .put("rejection_reasons",JSONArray(onlineQuality.reasons))
                 .toString(2))
