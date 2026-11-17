@@ -22,7 +22,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                        val lastDepth:android.graphics.Bitmap?,
                        val trajectory:OfflineVisualOdometry.Result?,
                        val warnings:List<String>,
-                       val externalVio:List<ExternalVioTrajectory.Sample> = emptyList())
+                       val externalVio:List<ExternalVioTrajectory.Sample> = emptyList(),
+                       val fusedPoints:Int = 0, val fusedFrames:Int = 0)
 
     companion object {
         fun closestIndex(poses:List<OfflineVisualOdometry.Pose>,
@@ -108,8 +109,18 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .toString(2))
         }
         if(photos.isEmpty())warnings+="Keine hochauflösenden Fotos vorhanden"
-        // Explicitly bounded run to protect thermal/memory stability.
-        val selected=photos.take(24)
+        // Uniformly sample the WHOLE trajectory; first 24 seconds of a long
+        // scan would otherwise map only its starting corner.
+        val selected=if(photos.size<=24)photos else (0 until 24).map { i ->
+            photos[i * (photos.size-1) / 23]
+        }.distinctBy { it.jpeg.name }
+        val cameraCalibration=if(external.isNotEmpty())
+            OpenVinsDa3Fusion.calibration(session) else null
+        if(external.isNotEmpty() && cameraCalibration==null)
+            warnings+="Keine passende gespeicherte OpenVINS-Pinhole/Radtan-Kalibrierung: "+
+                "DA3-Tiefenkarten bleiben erhalten, aber keine 3D-Punkte projiziert"
+        val mapSamples=ArrayList<SurveyDepth>()
+        var fusedFrames=0
         var done=0;var paired=0
         var last:android.graphics.Bitmap?=null
         var ai:Da3DepthEngine?=null
@@ -143,6 +154,37 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     good[(good.size*.98).toInt().coerceAtMost(good.lastIndex)]
                     else 0f
                 val spread=(hi-lo).coerceAtLeast(1e-6f)
+                // The ORIGINAL native camera image geometry is used for
+                // projection; DA3 internally rotates/crops to portrait.
+                // Never equate DA3 model pixel coordinates with Camera2 K.
+                if(cameraCalibration!=null && external.isNotEmpty() &&
+                    position>=0 && good.isNotEmpty() &&
+                    mapSamples.size<180_000){
+                    try {
+                        val bounds=android.graphics.BitmapFactory.Options().apply{
+                            inJustDecodeBounds=true
+                        }
+                        android.graphics.BitmapFactory.decodeByteArray(jpeg,0,
+                            jpeg.size,bounds)
+                        if(cameraCalibration.compatibleWith(
+                                bounds.outWidth,bounds.outHeight)){
+                            val projected=OpenVinsDa3Fusion.sample(inference,
+                                external[position],cameraCalibration,
+                                bounds.outWidth,bounds.outHeight,lo,hi,
+                                good[good.size/2])
+                            if(projected.isNotEmpty()){
+                                mapSamples.addAll(projected)
+                                fusedFrames++
+                            }
+                        }else if(fusedFrames==0){
+                            warnings+="RGB-Auflösung und Kalibrierung stimmen "+
+                                "nicht überein; keine ungesicherte Projektion"
+                        }
+                    }catch(t:Throwable){
+                        warnings+="DA3-3D-Projektion Foto "+(i+1)+": "+
+                            (t.message?:t.javaClass.simpleName)
+                    }
+                }
                 val encoded=ByteBuffer.allocate(inference.relativeDepth.size*2)
                     .order(ByteOrder.LITTLE_ENDIAN)
                 for(d in inference.relativeDepth){
@@ -190,13 +232,63 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 done++
             }
         }finally{ai?.close()}
+        var fusedPoints=0
+        if(mapSamples.size>=150 && fusedFrames>=2 && external.isNotEmpty()){
+            try{
+                update("3/3 · OpenVINS/DA3 Farbpunkte in eigener Karte fusionieren …")
+                val output=RoomScanStore(context,"rflab_openvins_scan_v1.json")
+                output.start("OpenVINS + DA3 " + suffix)
+                output.poseSource="OpenVINS native MSCKF + DA3 relative inverse depth; "+
+                    "estimated per-frame median scale 2 VIO units; "+
+                    "UNVALIDATED camera calibration, NOT metric"
+                val stride=(external.size/1200).coerceAtLeast(1)
+                external.forEachIndexed{index,sample->
+                    if(index%stride==0){
+                        OpenVinsPoseTransform.toMap(sample.center())?.let{xyz->
+                            output.addPose(JSONObject().put("state","TRACKING")
+                                .put("position_m",JSONArray().put(xyz[0])
+                                    .put(xyz[1]).put(xyz[2])))
+                        }
+                    }
+                }
+                mapSamples.chunked(2000).forEach{output.addDepth(it)}
+                if(output.pointCount()>=50 && output.finish()){
+                    fusedPoints=output.coloredPointCount()
+                    File(folder,"openvins_da3_map_summary.json").writeText(
+                        JSONObject().put("source","Native OpenVINS + single-image DA3")
+                            .put("namespace","rflab_openvins_scan_v1.json")
+                            .put("colored_points",fusedPoints)
+                            .put("keyframes",fusedFrames)
+                            .put("voxel_size_vio_units",VoxelFusion.VOXEL_M.toDouble())
+                            .put("reference_median_depth_vio_units",
+                                OpenVinsDa3Fusion.REFERENCE_DISTANCE_VIO)
+                            .put("depth_kind","relative inverse depth")
+                            .put("per_frame_affine_scale_verified",false)
+                            .put("camera_calibration_verified",false)
+                            .put("metric_dimensions_valid",false)
+                            .put("mesh",false)
+                            .toString(2))
+                    warnings+="3D-Farbkarte ist ein relativer Prototyp: "+
+                        "keine kalibrierte Entfernung oder Raumabmessung"
+                }else warnings+="Zu wenige gültige 3D-Punkte für eine Karte"
+            }catch(t:Throwable){
+                warnings+="OpenVINS/DA3-Kartenfusion fehlgeschlagen: "+
+                    (t.message?:t.javaClass.simpleName)
+            }
+        }else if(external.isNotEmpty()){
+            warnings+="Keine ausreichende Bild-/Posenüberdeckung für die "+
+                "farbige 3D-Punktwolke (mindestens 2 Bilder erforderlich)"
+        }
         File(folder,"manifest.json").writeText(JSONObject()
             .put("schema","rflab-offline-da3-pose-bundle-v1")
             .put("images_processed",done)
             .put("photos_with_nearby_optical_pose",paired)
             .put("input_photos",selected.size)
             .put("relative_units_only",true)
-            .put("not_metric_or_fused",true)
+            .put("not_metric_or_fused",fusedPoints<50)
+            .put("fused_colored_point_count",fusedPoints)
+            .put("fused_keyframes",fusedFrames)
+            .put("metric_dimensions_valid",false)
             .put("vo_status",when{
                 external.isNotEmpty()->"OpenVINS native VIO, unvalidated"
                 poses!=null->"OpenCV relative-only"
@@ -207,10 +299,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("warnings",JSONArray(warnings))
             .toString(2))
         update("Fertig: "+done+" KI-Tiefenkarten, "+
-            paired+" Kamerapositionen zugeordnet")
+            paired+" Posen zugeordnet, "+fusedPoints+" RGB-3D-Punkte")
         return Summary(folder,
             if(external.isNotEmpty()) external.size else poses?.poses?.size?:0,
             poses?.inliers?:0,done,paired,poses?.rejected?:0,
-            last,poses,warnings,external)
+            last,poses,warnings,external,fusedPoints,fusedFrames)
     }
 }
