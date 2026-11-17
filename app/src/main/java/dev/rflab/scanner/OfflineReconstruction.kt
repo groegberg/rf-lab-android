@@ -210,9 +210,16 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     external[position].onlineCamera else null
                 val correctedRotation=online?.rotationCamFromImu()
                     ?:rotationMatrix
-                val imageOrientation=correctedRotation?.let{
-                    OpenVinsImageOrientation.estimate(imu,ts,it)
-                }
+                // Online temporal calibration relates the clocks by
+                // t_IMU=t_CAMERA+dt; querying raw IMU at the camera clock
+                // silently causes a different scene-upright rotation.
+                val imuQueryTs=if(online!=null)
+                    OpenVinsImageOrientation.imuTimestampNs(
+                        ts,online.timeOffsetSeconds) else ts
+                val imageOrientation=if(imuQueryTs!=null)
+                    correctedRotation?.let{
+                        OpenVinsImageOrientation.estimate(imu,imuQueryTs,it)
+                    } else null
                 // OpenVINS optimizes K, R_ItoC and sensor time offset
                 // AFTER startup. Use its SAME-POSE state, not a stale
                 // session-start Camera2 seed, to project the RGB keyframe.
@@ -315,6 +322,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("gravity_alignment_error_degrees",
                         imageOrientation?.errorDegrees ?: JSONObject.NULL)
                     .put("imu_gravity_samples",imageOrientation?.samples ?: 0)
+                    .put("imu_gravity_query_timestamp_ns",
+                        imuQueryTs ?: JSONObject.NULL)
                     .put("gravity_orientation_safe_for_fusion",
                         imageOrientation?.usableForFusion ?: false)
                     .put("da3_actual_rotation_degrees",
