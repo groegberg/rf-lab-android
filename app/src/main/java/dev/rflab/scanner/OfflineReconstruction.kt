@@ -203,6 +203,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         android.graphics.Bitmap.CompressFormat.JPEG,88,stream)
                 }
                 manifest.put(JSONObject()
+                    .put("source_photo_index",i)
                     .put("input_photo",photo.jpeg.name)
                     .put("timestamp_ns",photo.json.optLong("timestamp_ns"))
                     .put("depth_u16_file","$stem.u16")
@@ -276,10 +277,14 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("inverse_depth_shift_vio",fit.shift)
                 .put("coverage_quadrants",fit.coverageQuadrants)
                 .put("aligned_3d_points",fused.size))
-            manifest.optJSONObject(index)?.put("inverse_depth_alignment",
-                JSONObject().put("scale",fit.scale).put("shift",fit.shift)
-                    .put("inliers",fit.inliers)
-                    .put("median_relative_error",fit.medianRelativeError))
+            for(manifestIdx in 0 until manifest.length()){
+                val entry=manifest.optJSONObject(manifestIdx) ?: continue
+                if(entry.optInt("source_photo_index",-1)==index)
+                    entry.put("inverse_depth_alignment",JSONObject()
+                        .put("scale",fit.scale).put("shift",fit.shift)
+                        .put("inliers",fit.inliers)
+                        .put("median_relative_error",fit.medianRelativeError))
+            }
         }
         // At least two independently aligned views are required; otherwise
         // there is no observable shared geometry, only a DA3 depth preview.
