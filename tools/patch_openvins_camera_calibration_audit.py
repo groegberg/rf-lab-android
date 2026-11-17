@@ -34,6 +34,7 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
     private var auditCaptures = 0
     private var auditPhysicalFirst: String? = null
     private var auditPhysicalChanged = false
+    private var auditWarningAlreadySaved = false
     private var auditFocalFirst: FloatArray? = null
     private var auditMaxFocalDrift = 0.0
     private var auditFocusFirst: Float? = null
@@ -49,6 +50,7 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
         auditCaptures=0
         auditPhysicalFirst=null
         auditPhysicalChanged=false
+        auditWarningAlreadySaved=false
         auditFocalFirst=null
         auditMaxFocalDrift=0.0
         auditFocusFirst=null
@@ -167,9 +169,14 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
                 CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
             auditResultZoom=result.get(CaptureResult.CONTROL_ZOOM_RATIO)
                 ?.toDouble() ?:Double.NaN
+            // Do not perform disk IO on EVERY camera callback once a
+            // persistent warning appears: one-shot immediate alert, then
+            // once per ~second. Avoid creating the very VIO lag we audit.
+            val warning=auditPhysicalChanged ||
+                auditMaxFocalDrift>.01 || auditMaxFocusDrift>.05
             if(auditCaptures<=2 || auditCaptures%30==0 ||
-                auditPhysicalChanged || auditMaxFocalDrift>.01 ||
-                auditMaxFocusDrift>.05)writeCameraAudit()
+                (warning && !auditWarningAlreadySaved))writeCameraAudit()
+            if(warning)auditWarningAlreadySaved=true
         }
     }
 """)
