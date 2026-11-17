@@ -60,7 +60,7 @@ internal object OpenVinsDa3Alignment {
         val cos=dot(a.unit,b.unit).coerceIn(-1.0,1.0)
         val determinant=1-cos*cos
         // Must have at least ~1.5° parallax, not a pure rotation.
-        if(determin<.00069) return null
+        if(determinant<.00069) return null
         val w=minus(b.origin,a.origin)
         val aw=dot(a.unit,w)
         val bw=dot(b.unit,w)
