@@ -79,19 +79,29 @@ internal class Da3DepthEngine(private val context: Context) : AutoCloseable {
         val inferenceMs: Long,
         val accelerator: String,
         val validFraction: Float,
-        val cropPercent: Float
+        val cropPercent: Float,
+        val rotationDegrees: Int
     )
 
     fun predict(frame: StoredRgbdKeyframe): Prediction = predictJpeg(frame.imageJpeg)
 
     /** Direct Camera2 photo inference: no ARCore pose/depth dependency. */
-    fun predictJpeg(jpeg: ByteArray): Prediction {
+    fun predictJpeg(jpeg: ByteArray,
+                    uprightRotationDegrees: Int? = null): Prediction {
         initialize()
         val start = System.nanoTime()
         val jpeg = BitmapFactory.decodeByteArray(
             jpeg, 0, jpeg.size) ?: error("Invalid camera JPEG")
-        val rotated = if (jpeg.width > jpeg.height) {
-            val m = Matrix().apply { postRotate(90f) }
+        // Raw ImageReader pixels stay in the CAMERA SENSOR frame even when
+        // Android locks the activity landscape. A gravity-based rotation can
+        // now override the historical forced +90 degree model rotation.
+        val rotation = uprightRotationDegrees ?:
+            if(jpeg.width>jpeg.height)90 else 0
+        require(rotation in listOf(0,90,180,270)){
+            "DA3 rotation must be an exact right angle"
+        }
+        val rotated = if(rotation!=0){
+            val m = Matrix().apply { postRotate(rotation.toFloat()) }
             Bitmap.createBitmap(jpeg, 0, 0, jpeg.width, jpeg.height, m, true)
                 .also { jpeg.recycle() }
         } else jpeg
@@ -121,7 +131,8 @@ internal class Da3DepthEngine(private val context: Context) : AutoCloseable {
         val good = depth.count { it.isFinite() && it > 0f }
         return Prediction(inputBitmap, visual, depth,
             (System.nanoTime() - start) / 1_000_000, backend,
-            good.toFloat() / N, crop.coerceIn(0f, 1f))
+            good.toFloat() / N, crop.coerceIn(0f, 1f),
+            rotation)
     }
 
     override fun close() {
