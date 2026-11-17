@@ -81,7 +81,8 @@ internal class OpenVinsSessionImport(private val context: Context) {
         RegexOption.IGNORE_CASE)
     private val configNames=setOf("estimator_config.yaml",
         "kalibr_imu_chain.yaml","kalibr_imucam_chain.yaml",
-        "PIXEL_CALIBRATION_WARNING.txt")
+        "PIXEL_CALIBRATION_WARNING.txt",
+        "PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
 
     private fun readBounded(input:ZipInputStream,max:Int):ByteArray {
         val out=java.io.ByteArrayOutputStream()
