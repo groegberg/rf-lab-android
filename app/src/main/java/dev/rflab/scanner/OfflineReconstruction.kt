@@ -150,6 +150,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
             (imu.isEmpty() || rotationMatrix==null))
             warnings+="IMU-Schwerkraft bzw. T_cam_imu nicht verfügbar: "+
                 "Bildausrichtung ungesichert; DA3-Vorschau ohne 3D-Fusion"
+        if(external.isNotEmpty()){
+            val online=external.count{it.onlineCamera!=null}
+            if(online<external.size*.8)
+                warnings+="Nativer Kamerapfad enthält nur "+online+"/"+external.size+
+                    " Posen mit exportierter Online-Kalibrierung; "+
+                    "alte VIO-CSV-Formate werden nicht für 3D verwendet"
+        }
         val candidateFeatures=ArrayList<OpenVinsDa3MultiView.Frame>()
         val candidateRays=HashMap<Int,List<OpenVinsDa3Fusion.RaySample>>()
         var fusedFrames=0
@@ -162,9 +169,23 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 update("2/2 · Depth Anything 3 "+(i+1)+"/"+selected.size)
                 val jpeg=photo.jpeg.readBytes()
                 val ts=photo.json.optLong("timestamp_ns")
-                val imageOrientation=rotationMatrix?.let{
+                val position=if(external.isNotEmpty())
+                    ExternalVioTrajectory.closestIndex(external,ts)
+                    else closestIndex(poses?.poses?:emptyList(),ts)
+                val online=if(external.isNotEmpty() && position>=0)
+                    external[position].onlineCamera else null
+                val correctedRotation=online?.rotationCamFromImu()
+                    ?:rotationMatrix
+                val imageOrientation=correctedRotation?.let{
                     OpenVinsImageOrientation.estimate(imu,ts,it)
                 }
+                // OpenVINS optimizes K, R_ItoC and sensor time offset
+                // AFTER startup. Use its SAME-POSE state, not a stale
+                // session-start Camera2 seed, to project the RGB keyframe.
+                val frameCalibration=if(cameraCalibration!=null &&
+                    online!=null && kotlin.math.abs(online.timeOffsetSeconds)<.10)
+                    online.cameraCalibration(cameraCalibration)
+                    else null
                 val engine=ai?:Da3DepthEngine(context.applicationContext).also{
                     ai=it
                 }
@@ -177,9 +198,6 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         warnings+="DA3 Foto "+(i+1)+": "+(t.message?:"error")
                         continue
                     }
-                val position=if(external.isNotEmpty())
-                    ExternalVioTrajectory.closestIndex(external,ts)
-                    else closestIndex(poses?.poses?:emptyList(),ts)
                 val matched=if(external.isEmpty() && position>=0)
                     poses?.poses?.getOrNull(position) else null
                 if(position>=0)paired++
@@ -197,7 +215,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // per frame. Do NOT apply an invented median depth scale.
                 // After all DA3 frames have run, fit inverse-depth scale/shift
                 // from triangulated native VIO camera baselines.
-                if(cameraCalibration!=null && external.isNotEmpty() &&
+                if(frameCalibration!=null && external.isNotEmpty() &&
                     imageOrientation?.usableForFusion==true &&
                     inference.cropPercent<.70f &&
                     position>=0 && good.size>=100){
@@ -207,17 +225,17 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         }
                         android.graphics.BitmapFactory.decodeByteArray(jpeg,0,
                             jpeg.size,bounds)
-                        if(cameraCalibration.compatibleWith(
+                        if(frameCalibration.compatibleWith(
                                 bounds.outWidth,bounds.outHeight)){
                             val frame=OpenVinsDa3MultiView.extract(i,
                                 inference.image,inference.relativeDepth,
-                                external[position],cameraCalibration,
+                                external[position],frameCalibration,
                                 bounds.outWidth,bounds.outHeight,
                                 inference.rotationDegrees)
                             if(frame!=null){
                                 candidateFeatures.add(frame)
                                 val rays=OpenVinsDa3Fusion.sampleUnscaled(
-                                    inference,external[position],cameraCalibration,
+                                    inference,external[position],frameCalibration,
                                     bounds.outWidth,bounds.outHeight,lo,hi)
                                 if(rays.isNotEmpty())candidateRays[i]=rays
                             }
@@ -267,6 +285,15 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         imageOrientation?.usableForFusion ?: false)
                     .put("da3_actual_rotation_degrees",
                         inference.rotationDegrees)
+                    .put("online_openvins_camera_calibration_used",
+                        frameCalibration!=null)
+                    .put("online_camera_imu_time_offset_ms",
+                        online?.timeOffsetSeconds?.times(1000.0)
+                            ?:JSONObject.NULL)
+                    .put("online_camera_focal_length_px",
+                        frameCalibration?.let{
+                            JSONArray().put(it.fx).put(it.fy)
+                        }?:JSONObject.NULL)
                     .put("optical_pose_index",position)
                     .put("optical_pose_valid",
                         if(external.isNotEmpty()) position>=0
