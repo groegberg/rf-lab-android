@@ -23,7 +23,21 @@ internal object OpenVinsCameraEvidence {
         val file=File(session,"external_calibration/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
         val text=if(file.isFile && file.length() in 30..128_000)
             file.readText() else null
-        return inspect(text,OpenVinsDa3Fusion.calibration(session))
+        val measured=inspect(text,OpenVinsDa3Fusion.calibration(session))
+        // A cached upstream Kalibr YAML from another phone must NEVER pass
+        // merely because the Camera2 stream has good CaptureResult metadata.
+        val seed=File(session,
+            "external_calibration/PIXEL_CALIBRATION_WARNING.txt")
+            .takeIf{it.isFile && it.length() in 40..128_000}?.readText()
+        val id=measured.cameraId
+        val seedVerified=seed!=null &&
+            seed.contains("seed=Android gyro-referenced lens pose seed") &&
+            id!=null && seed.contains("id="+id+" K=")
+        return if(seedVerified)measured else measured.copy(
+            allowedForExperimentalFusion=false,
+            problems=measured.problems+
+                "Camera2-YAML-Seed stammt nicht nachweisbar von "+
+                "derselben gyroskopreferenzierten Pixel-Kamera")
     }
 
     fun inspect(raw:String?,
