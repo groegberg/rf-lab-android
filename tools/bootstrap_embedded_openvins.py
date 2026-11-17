@@ -69,6 +69,10 @@ def main() -> None:
     # OpenVINS online calibration has started changing its filter state.
     run(sys.executable, str(PROJECT / "tools" /
         "patch_openvins_online_calibration_export.py"), str(SOURCE))
+    # Original GPLv3 Android Camera2 bridge assumed NV21 for all
+    # YUV_420_888 streams. Correct native plane chroma/row pixel strides.
+    run(sys.executable, str(PROJECT / "tools" /
+        "patch_openvins_camera_yuv.py"), str(SOURCE))
     # RF Lab's scanner subclasses the real native VIO activity, receiving
     # initialized MSCKF poses via callbacks without a second camera pipeline.
     run(sys.executable, str(PROJECT / "tools" / "patch_embedded_openvins_scan.py"),
