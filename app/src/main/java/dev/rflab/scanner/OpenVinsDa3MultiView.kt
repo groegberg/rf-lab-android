@@ -24,7 +24,8 @@ internal object OpenVinsDa3MultiView {
         val relativeInverse: Double,
         val normalizedX: Double,
         val normalizedY: Double,
-        val ray: OpenVinsDa3Alignment.Ray
+        val ray: OpenVinsDa3Alignment.Ray,
+        val argb:Int
     )
 
     class Frame(val photoIndex: Int,
@@ -37,7 +38,8 @@ internal object OpenVinsDa3MultiView {
     data class Result(val fits: Map<Int,OpenVinsDa3Alignment.Fit>,
                       val matchedFeatures: Int,
                       val triangulatedFeatures: Int,
-                      val pairsConsidered: Int) 
+                      val pairsConsidered: Int,
+                      val diagnosticPoints:List<SurveyDepth> = emptyList()) 
 
     private fun norm(v:DoubleArray):Double =
         sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
@@ -102,7 +104,8 @@ internal object OpenVinsDa3MultiView {
                                 (v+.5)/modelInput.height,
                                 OpenVinsDa3Alignment.Ray(origin,
                                     DoubleArray(3){direction[it]/distance},
-                                    distance))
+                                    distance),
+                                modelInput.getPixel(ix,iy) or (255 shl 24))
                         }
                     }
                 }
@@ -125,6 +128,8 @@ internal object OpenVinsDa3MultiView {
         val matcher=BFMatcher.create(Core.NORM_HAMMING,false)
         var matched=0
         var triangulated=0
+        // True multi-view correspondences, diagnostic ONLY, non-metric.
+        val diagnostic=ArrayList<SurveyDepth>(4000)
         var tried=0
         try {
             for(i in 0 until frames.lastIndex) {
@@ -165,6 +170,20 @@ internal object OpenVinsDa3MultiView {
                             val depth=OpenVinsDa3Alignment.triangulate(
                                 fa.ray,fb.ray) ?:return@forEach
                             triangulated++
+                            if(diagnostic.size<20_000){
+                                val aDist=fa.ray.lengthAtAxialUnit/depth.inverseA
+                                val bDist=fb.ray.lengthAtAxialUnit/depth.inverseB
+                                val xyz=DoubleArray(3){axis->
+                                    .5*(fa.ray.origin[axis]+aDist*fa.ray.unit[axis]+
+                                        fb.ray.origin[axis]+bDist*fb.ray.unit[axis])
+                                }
+                                if(xyz.all{it.isFinite()} &&
+                                    xyz.all{kotlin.math.abs(it)<30.0})
+                                    diagnostic.add(SurveyDepth(
+                                        xyz[0].toFloat(),xyz[1].toFloat(),
+                                        xyz[2].toFloat(),confidence=.42f,
+                                        argb=fa.argb,rawDepth=false))
+                            }
                             val aa=samples.getValue(a.photoIndex)
                             val bb=samples.getValue(b.photoIndex)
                             if(aa.size<3000) aa.add(OpenVinsDa3Alignment.Observation(
@@ -184,6 +203,6 @@ internal object OpenVinsDa3MultiView {
         val fits=samples.mapNotNull { (index,observations) ->
             OpenVinsDa3Alignment.fit(observations)?.let{index to it}
         }.toMap()
-        return Result(fits,matched,triangulated,tried)
+        return Result(fits,matched,triangulated,tried,diagnostic)
     }
 }
