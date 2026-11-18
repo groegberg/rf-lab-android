@@ -16,6 +16,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.graphics.drawable.GradientDrawable
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -105,11 +107,11 @@ class OfflineReconstructionActivity:Activity() {
             textSize=12f;setTextColor(Color.rgb(190,220,230))
             text="Bereit · "+store.frames(session).size+" Originalfotos\n"+
                 "Nur relative Tiefen/Posen, KEIN vermessener 3D-Raum."
-            maxLines=6
+            maxLines=9
             setPadding(dp(9),dp(11),dp(9),dp(9))
         }
         root.addView(details)
-        mapToggle=button("3D-Farbkarte / Kamerapfad") {
+        mapToggle=button("3D-Kamerapfad / 2D-Pfad") {
             val show=cloud.visibility!=View.VISIBLE
             cloud.visibility=if(show)View.VISIBLE else View.GONE
             trajectory.visibility=if(show)View.GONE else View.VISIBLE
@@ -124,6 +126,40 @@ class OfflineReconstructionActivity:Activity() {
                 putExtra("photo_session",session.name)
             })
         },LinearLayout.LayoutParams(-1,dp(48)).apply{topMargin=dp(6)})
+        val importedVio=ExternalVioTrajectory.read(session)
+        if(importedVio.isNotEmpty()){
+            trajectory.externalPoses=importedVio
+            show3dNativeTrajectory(importedVio)
+            details.text=importedVio.size.toString()+" echte OpenVINS-Posen · "+
+                store.frames(session).size+" RGB-Fotos\n"+
+                "3D-Kamerapfad sichtbar. Farbige Tiefe nur nach Qualitätsprüfung."
+        }
+    }
+
+    private fun show3dNativeTrajectory(
+        poses:List<ExternalVioTrajectory.Sample>) {
+        if(poses.isEmpty())return
+        val preview=RoomScanStore(this,"rflab_openvins_scan_v1.json")
+        // Create a TRANSIENT 3D track, not a persisted artificial depth
+        // map. Prevent mixing this session with any previous map origin.
+        preview.start("OpenVINS · 3D native VIO trajectory")
+        preview.poseSource="OpenVINS native camera path only; "+
+            "no color depth; no validated metric calibration"
+        val stride=(poses.size/1200).coerceAtLeast(1)
+        poses.forEachIndexed { index,sample ->
+            if(index%stride==0){
+                OpenVinsPoseTransform.toMap(sample.center())?.let { xyz ->
+                    preview.addPose(JSONObject().put("state","TRACKING")
+                        .put("position_m",JSONArray().put(xyz[0])
+                            .put(xyz[1]).put(xyz[2])))
+                }
+            }
+        }
+        cloud.store=preview
+        cloud.visibility=View.VISIBLE
+        trajectory.visibility=View.GONE
+        mapToggle.text="3D-Kamerapfad / 2D-Pfad"
+        mapToggle.isEnabled=true
     }
 
     private fun start(){
@@ -132,9 +168,7 @@ class OfflineReconstructionActivity:Activity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         calculate.isEnabled=false
         mapToggle.isEnabled=false
-        cloud.visibility=View.GONE
-        cloud.store=null
-        trajectory.visibility=View.VISIBLE
+        // Keep the real trajectory visible during slow AI reconstruction.
         details.text="OpenVINS / Depth Anything 3 wird offline verarbeitet …"
         executor.execute{
             try{
@@ -157,6 +191,11 @@ class OfflineReconstructionActivity:Activity() {
                         cloud.visibility=View.VISIBLE
                         trajectory.visibility=View.GONE
                         mapToggle.isEnabled=true
+                        mapToggle.text="3D-Farbpunkte / 2D-Kamerapfad"
+                    }else if(result.externalVio.isNotEmpty()){
+                        // Lack of calibrated depth MUST NOT hide the native
+                        // 3D trajectory the user has already recorded.
+                        show3dNativeTrajectory(result.externalVio)
                     }
                     result.lastDepth?.let{depth.setImageBitmap(it)}
                     title.text="OFFLINE · ERGEBNIS"
@@ -167,18 +206,16 @@ class OfflineReconstructionActivity:Activity() {
                         result.da3Images.toString()+" DA3-Bilder · "+
                             diag.matchedPhotos+"/"+diag.photoCount+
                             " Fotos mit VIO-Pose\n"+
-                            result.fusedPoints+" echte RGB-Farbpunkte aus "+
-                            result.fusedFrames+" Keyframes\n"+
-                            String.format(java.util.Locale.GERMANY,
-                                "%.1f Posen/s · max. Lücke %.0f ms",
-                                diag.poseRateHz,diag.maxPoseGapMs)+"\n"+
-                            "Relativer Tiefenmaßstab · keine kalibrierte Raumkarte"+
-                            if(result.fusedPoints==0 && result.warnings.isNotEmpty())
-                                "\n⚠ "+(result.warnings.firstOrNull{
-                                    it.contains("gesperrt") ||
-                                    it.contains("Kalibrierung") ||
-                                    it.contains("Ausrichtung")
-                                }?:result.warnings.last()).take(260) else ""
+                            if(result.fusedPoints>=50)
+                                result.fusedPoints+" RGB-Farbpunkte aus "+
+                                    result.fusedFrames+" Keyframes\n"+
+                                    "Experimentelle Karte · Maßstab unvalidiert"
+                            else "3D-Kamerapfad ist vorhanden, aber KEINE Farbkarte.\n"+
+                                "Grund: "+(OpenVinsCameraEvidence.read(session)
+                                    .problems.firstOrNull()
+                                    ?:result.warnings.lastOrNull()
+                                    ?:"Unzureichende Multi-View-Triangulation")
+                                    .take(230)
                     }else{
                         result.da3Images.toString()+
                             " DA3-Bilder · "+result.pairedImages+

@@ -109,11 +109,16 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .toString(2))
         }
         if(photos.isEmpty())warnings+="Keine hochauflösenden Fotos vorhanden"
-        // Uniformly sample the WHOLE trajectory; first 24 seconds of a long
-        // scan would otherwise map only its starting corner.
-        val selected=if(photos.size<=24)photos else (0 until 24).map { i ->
-            photos[i * (photos.size-1) / 23]
-        }.distinctBy { it.jpeg.name }
+        // Camera2 captures photos before OpenVINS initializes. In the
+        // uploaded Pixel scan the first ~13 s have NO native camera pose.
+        // Do not waste the 24 inference slots on untriangulatable frames.
+        // All original photos are retained in the imported photo session.
+        val selected=VioKeyframeSelection.selectIndices(
+            photos.map{it.json.optLong("timestamp_ns")},external,24)
+            .map{photos[it]}
+        if(external.isNotEmpty())
+            warnings+="DA3 analysiert "+selected.size+
+                " pose-zugeordnete RGB-Bilder (Init-Bilder bleiben gesichert)"
         val cameraEvidence=if(external.isNotEmpty())
             OpenVinsCameraEvidence.read(session) else null
         val initialCalibration=if(external.isNotEmpty())
@@ -446,6 +451,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("namespace","rflab_openvins_scan_v1.json")
                 .put("method","reciprocal ORB, native VIO ray triangulation, "+
                     "robust affine inverse-depth scale/shift, RGB voxel fusion")
+                .put("selected_pose_matched_rgb_frames",selected.size)
                 .put("registered_keyframes",alignedFrames)
                 .put("colored_points",fusedPoints)
                 .put("matches_checked",matchedFeatures)

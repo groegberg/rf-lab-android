@@ -148,7 +148,12 @@ class ScanCloudView(context: Context) : View(context) {
         val cx = (bounds.minX + bounds.maxX) * .5f
         val cy = (bounds.minY + bounds.maxY) * .5f
         val cz = (bounds.minZ + bounds.maxZ) * .5f
-        val spread = max(2f, max(bounds.width, max(bounds.depth, bounds.height)))
+        // A short native VIO path (e.g. 30cm) was nearly invisible at
+        // the old hardcoded minimum 2m scale. Auto-fit real poses when
+        // there are no accepted depth points; never fake a cloud.
+        val size=max(bounds.width,max(bounds.depth,bounds.height))
+        val spread=if(points.isEmpty())max(.25f,size*1.2f)
+            else max(2f,size)
         val scale = min(width, height) / (spread * 1.85f) * zoom
         val co = cos(yaw)
         val si = sin(yaw)
