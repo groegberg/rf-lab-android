@@ -170,6 +170,50 @@ class OfflineReconstructionActivity:Activity() {
         mapToggle.isEnabled=true
     }
 
+    /** Real RGB pixels and DA3-predicted relative depth, camera-local. */
+    private fun showRelativeDepthPreview(points:List<SurveyDepth>){
+        if(points.size<50)return
+        val preview=RoomScanStore(this,"rflab_openvins_scan_v1.json")
+        preview.start("DA3 · relative RGB depth preview")
+        preview.poseSource="DA3 RELATIVE SINGLE-VIEW 2.5D preview; "+
+            "camera-local display ONLY; no metric/multi-view room map"
+        preview.addDepth(points)
+        cloud.store=preview
+        cloud.topDown=false
+        cloud.visibility=View.VISIBLE
+        trajectory.visibility=View.GONE
+        mapToggle.isEnabled=true
+        mapToggle.text="3D-RGB-Tiefenvorschau / 2D-Kamerapfad"
+    }
+
+    /** Real triangulated multiview, but unvalidated Pixel IMU extrinsic.
+     * Never persist this as a calibrated room measurement.
+     */
+    private fun showResearchMultiViewPreview(
+        poses:List<ExternalVioTrajectory.Sample>,points:List<SurveyDepth>){
+        if(points.size<50)return
+        val preview=RoomScanStore(this,"rflab_openvins_scan_v1.json")
+        preview.start("OpenVINS + DA3 · uncalibrated multiview")
+        preview.poseSource="OpenVINS DA3 MULTIVIEW RESEARCH preview; "+
+            "real RGB correspondences, metric accuracy UNVALIDATED"
+        val stride=(poses.size/1200).coerceAtLeast(1)
+        poses.forEachIndexed{index,sample->
+            if(index%stride==0)OpenVinsPoseTransform.toMap(
+                sample.center())?.let{xyz->
+                preview.addPose(JSONObject().put("state","TRACKING")
+                    .put("position_m",JSONArray().put(xyz[0])
+                        .put(xyz[1]).put(xyz[2])))
+            }
+        }
+        points.chunked(1500).forEach{preview.addDepth(it)}
+        cloud.store=preview
+        cloud.topDown=false
+        cloud.visibility=View.VISIBLE
+        trajectory.visibility=View.GONE
+        mapToggle.text="3D-Mehrbild-Diagnose / 2D-Kamerapfad"
+        mapToggle.isEnabled=true
+    }
+
     private fun start(){
         if(running)return
         running=true
@@ -181,7 +225,17 @@ class OfflineReconstructionActivity:Activity() {
         executor.execute{
             try{
                 val result=OfflineReconstruction(applicationContext)
-                    .run(session){s->
+                    .run(session,onRelativePreview={points->
+                        runOnUiThread{
+                            if(!isFinishing&&!isDestroyed){
+                                showRelativeDepthPreview(points)
+                                details.text="DA3: "+points.size+
+                                    " echte RGB-Punkte aus einer "+
+                                    "relativen Einzelbild-Tiefenkarte. "+
+                                    "Mehrbild-Fusion wird geprüft …"
+                            }
+                        }
+                    }){s->
                         runOnUiThread{
                             if(!isFinishing&&!isDestroyed)details.text=s
                         }
@@ -200,9 +254,14 @@ class OfflineReconstructionActivity:Activity() {
                         trajectory.visibility=View.GONE
                         mapToggle.isEnabled=true
                         mapToggle.text="3D-Farbpunkte / 2D-Kamerapfad"
+                    }else if(result.multiViewResearchPreview.size>=50){
+                        showResearchMultiViewPreview(result.externalVio,
+                            result.multiViewResearchPreview)
+                    }else if(result.relativePreview.size>=50){
+                        // The requested colored 3D visualization must not
+                        // disappear when the VIO geometry safety gate fires.
+                        showRelativeDepthPreview(result.relativePreview)
                     }else if(result.externalVio.isNotEmpty()){
-                        // Lack of calibrated depth MUST NOT hide the native
-                        // 3D trajectory the user has already recorded.
                         show3dNativeTrajectory(
                             result.externalVio,result.sparsePreview)
                     }
@@ -219,18 +278,27 @@ class OfflineReconstructionActivity:Activity() {
                                 result.fusedPoints.toString()+" RGB-Farbpunkte aus "+
                                     result.fusedFrames+" Keyframes\n"+
                                     "Experimentelle Karte · Maßstab unvalidiert"
-                            else (if(result.sparsePreview.isNotEmpty())
-                                result.sparsePreview.size.toString()+
-                                    " farbige ORB-3D-Merkmale als "+
-                                    "UNKALIBRIERTE Diagnosevorschau.\n"
-                                else "3D-Kamerapfad vorhanden, noch keine "+
-                                    "3D-Farbpunkte.\n")+
-                                "Keine DA3-Raumkarte. Grund: "+
-                                (OpenVinsCameraEvidence.read(session)
-                                    .problems.firstOrNull()
+                            else (when{
+                                result.multiViewResearchPreview.size>=50 ->
+                                    result.multiViewResearchPreview.size.toString()+
+                                    " RGB-Punkte aus Mehrbild-Fusion "+
+                                    "(Forschungsvorschau).\\n"
+                                result.relativePreview.size>=50 ->
+                                    result.relativePreview.size.toString()+
+                                    " RGB-Punkte aus DA3-Einzelbild-Tiefe "+
+                                    "(relative 2.5D-Vorschau).\\n"
+                                result.sparsePreview.isNotEmpty() ->
+                                    result.sparsePreview.size.toString()+
+                                    " triangulierte ORB-RGB-Punkte.\\n"
+                                else -> "Noch keine 3D-Farbpunkte.\\n"
+                            })+
+                                "Keine kalibrierte Raumkarte. Grund: "+
+                                (result.motionQuality?.reasons?.firstOrNull()
+                                    ?:OpenVinsCameraEvidence.read(session)
+                                        .problems.firstOrNull()
                                     ?:result.warnings.lastOrNull()
-                                    ?:"Unzureichende Multi-View-Triangulation")
-                                    .take(210)
+                                    ?:"Zu wenige geometrische Übereinstimmungen")
+                                    .take(190)
                     }else{
                         result.da3Images.toString()+
                             " DA3-Bilder · "+result.pairedImages+
