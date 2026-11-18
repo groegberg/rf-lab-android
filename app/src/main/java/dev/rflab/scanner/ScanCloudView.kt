@@ -211,6 +211,10 @@ class ScanCloudView(context: Context) : View(context) {
         paint.style = Paint.Style.FILL
         paint.color = Color.rgb(184, 211, 228)
         canvas.drawText(when {
+            scan.poseSource.startsWith("DA3 RELATIVE SINGLE-VIEW") ->
+                "DA3-RGB-Tiefenrelief · EIN Foto · KEIN metrischer Maßstab"
+            scan.poseSource.startsWith("OpenVINS DA3 MULTIVIEW RESEARCH") ->
+                "OpenVINS+DA3 Farbkarte · DIAGNOSE · unkalibriert"
             scan.poseSource.startsWith("OpenVINS sparse diagnostic") ->
                 "DIAGNOSE: triangulierte RGB-Merkmale · NICHT metrisch kalibriert"
             scan.poseSource.startsWith("OpenVINS") && points.isEmpty() ->
