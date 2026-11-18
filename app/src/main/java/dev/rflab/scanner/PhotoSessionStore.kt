@@ -104,10 +104,9 @@ internal class PhotoSessionStore(context: Context) {
         require(allowed(session))
         val selected = frames(session)
         ZipOutputStream(output.buffered()).use { zip ->
-            fun entry(file: File) {
-                zip.putNextEntry(ZipEntry(file.name))
-                file.inputStream().buffered().use { it.copyTo(zip,64*1024) }
-                zip.closeEntry()
+            val archive=UniquePhotoZipEntries(zip)
+            fun entry(file: File, name:String=file.name) {
+                archive.add(file,name)
             }
             entry(File(session,"session.json"))
             File(session,"camera.json").takeIf { it.isFile }?.let{entry(it)}
@@ -115,16 +114,10 @@ internal class PhotoSessionStore(context: Context) {
             File(session,"external_vio_trajectory.csv").takeIf {
                 it.isFile
             }?.let { entry(it) }
-            session.listFiles()?.filter{
-                it.isFile && it.name=="imu_openvins.csv"
-            }?.forEach{entry(it)}
             File(session,"external_calibration").takeIf{
                 it.isDirectory
             }?.listFiles()?.filter{it.isFile}?.forEach{file->
-                zip.putNextEntry(ZipEntry(
-                    "external_calibration/"+file.name))
-                file.inputStream().buffered().use{it.copyTo(zip,64*1024)}
-                zip.closeEntry()
+                entry(file,"external_calibration/"+file.name)
             }
             // Actual 10Hz camera frames are required for offline odometry.
             MotionFrameStore.files(session).forEach { entry(it) }
@@ -138,11 +131,7 @@ internal class PhotoSessionStore(context: Context) {
                 it.isDirectory && it.name.startsWith("offline_")
             }?.sortedBy{it.name}?.forEach{folder->
                 folder.listFiles()?.filter{it.isFile}?.forEach{file->
-                    zip.putNextEntry(ZipEntry(folder.name+"/"+file.name))
-                    file.inputStream().buffered().use{
-                        it.copyTo(zip,64*1024)
-                    }
-                    zip.closeEntry()
+                    entry(file,folder.name+"/"+file.name)
                 }
             }
             // Continuous gyro/accelerometer streams are required for VIO.
