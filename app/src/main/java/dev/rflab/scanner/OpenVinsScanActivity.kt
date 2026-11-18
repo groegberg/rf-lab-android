@@ -14,6 +14,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
@@ -62,6 +64,17 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private var latestPosition: FloatArray? = null
     private var latestQuaternion: DoubleArray? = null
     private val oldId = com.openvins.android.R.id.trajectory_view
+    private val healthHandler = Handler(Looper.getMainLooper())
+    // Independent UI watchdog: when the native MSCKF worker stops returning
+    // poses, there is no onNativePoseReady callback to refresh diagnostics.
+    private val healthTicker = object : Runnable {
+        override fun run() {
+            if(recording && !isFinishing && !isDestroyed)
+                refreshNativeDiagnostics(SystemClock.elapsedRealtimeNanos())
+            if(!isFinishing && !isDestroyed)
+                healthHandler.postDelayed(this,800L)
+        }
+    }
 
     private fun dp(px: Int) = (px * resources.displayMetrics.density + .5f).toInt()
     private fun shape(color: Int) = GradientDrawable().apply {
@@ -566,12 +579,20 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         finish()
     }
 
+    override fun onResume() {
+        super.onResume()
+        healthHandler.removeCallbacks(healthTicker)
+        healthHandler.postDelayed(healthTicker,800L)
+    }
+
     override fun onPause() {
+        healthHandler.removeCallbacks(healthTicker)
         if (recording) stopCapture()
         super.onPause()
     }
 
     override fun onDestroy() {
+        healthHandler.removeCallbacks(healthTicker)
         worker.shutdown()
         super.onDestroy()
     }
