@@ -5,6 +5,8 @@ on:
     branches: [feature/embedded-openvins-v1.3]
     paths:
       - .github/workflows/publish-v1.3.7-private-visible-rgb-pipeline.yml
+      - app/src/main/**
+      - app/src/test/**
   workflow_dispatch:
 
 permissions:
