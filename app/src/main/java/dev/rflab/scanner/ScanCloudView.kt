@@ -211,6 +211,8 @@ class ScanCloudView(context: Context) : View(context) {
         paint.style = Paint.Style.FILL
         paint.color = Color.rgb(184, 211, 228)
         canvas.drawText(when {
+            scan.poseSource.startsWith("OpenVINS sparse diagnostic") ->
+                "DIAGNOSE: triangulierte RGB-Merkmale · NICHT metrisch kalibriert"
             scan.poseSource.startsWith("OpenVINS") && points.isEmpty() ->
                 "Native VIO · Türkis = Pfad · Orange = letzte Pose · noch keine Tiefe"
             showCameraColors -> "3D · Kamerafarben/Höhe · Türkis = Kamerapfad"
