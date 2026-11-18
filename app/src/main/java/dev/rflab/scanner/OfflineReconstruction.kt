@@ -23,7 +23,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                        val trajectory:OfflineVisualOdometry.Result?,
                        val warnings:List<String>,
                        val externalVio:List<ExternalVioTrajectory.Sample> = emptyList(),
-                       val fusedPoints:Int = 0, val fusedFrames:Int = 0)
+                       val fusedPoints:Int = 0, val fusedFrames:Int = 0,
+                       val sparsePreview:List<SurveyDepth> = emptyList())
 
     companion object {
         fun closestIndex(poses:List<OfflineVisualOdometry.Pose>,
@@ -157,6 +158,16 @@ internal class OfflineReconstruction(private val context:android.content.Context
             cameraEvidence?.allowedForExperimentalFusion==true &&
             onlineQuality?.acceptedForExperimentalFusion==true)
             initialCalibration else null
+        val seedText=File(session,
+            "external_calibration/PIXEL_CALIBRATION_WARNING.txt")
+            .takeIf{it.isFile && it.length() in 40..128_000}?.readText()
+        // PRIMARY_CAMERA references do not certify the camera-gyro lever
+        // arm. For stable hardware+VIO we may display *only* real ORB
+        // triangulations as a visibly marked, in-memory research preview.
+        val previewCalibration=if(initialCalibration!=null &&
+            OpenVinsSparsePreviewGate.allowed(
+                cameraEvidence,onlineQuality,seedText))
+            initialCalibration else null
         if(cameraEvidence!=null){
             File(folder,"camera_geometry_audit.json").writeText(JSONObject()
                 .put("source","real Camera2 CaptureResult and saved OpenVINS YAML")
@@ -228,9 +239,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // OpenVINS optimizes K, R_ItoC and sensor time offset
                 // AFTER startup. Use its SAME-POSE state, not a stale
                 // session-start Camera2 seed, to project the RGB keyframe.
-                val frameCalibration=if(cameraCalibration!=null &&
+                val baseCalibration=cameraCalibration ?: previewCalibration
+                val frameCalibration=if(baseCalibration!=null &&
                     online!=null && kotlin.math.abs(online.timeOffsetSeconds)<.10)
-                    online.cameraCalibration(cameraCalibration)
+                    online.cameraCalibration(baseCalibration)
                     else null
                 val engine=ai?:Da3DepthEngine(context.applicationContext).also{
                     ai=it
@@ -280,10 +292,14 @@ internal class OfflineReconstruction(private val context:android.content.Context
                                 inference.rotationDegrees)
                             if(frame!=null){
                                 candidateFeatures.add(frame)
-                                val rays=OpenVinsDa3Fusion.sampleUnscaled(
-                                    inference,external[position],frameCalibration,
-                                    bounds.outWidth,bounds.outHeight,lo,hi)
-                                if(rays.isNotEmpty())candidateRays[i]=rays
+                                // Do not use uncalibrated ORB previews as DA3
+                                // RGB-D room maps. This gate remains strict.
+                                if(cameraCalibration!=null){
+                                    val rays=OpenVinsDa3Fusion.sampleUnscaled(
+                                        inference,external[position],frameCalibration,
+                                        bounds.outWidth,bounds.outHeight,lo,hi)
+                                    if(rays.isNotEmpty())candidateRays[i]=rays
+                                }
                             }
                         }else{
                             warnings+="RGB-Bild "+(i+1)+
@@ -367,6 +383,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
         var matchedFeatures=0
         var triangulatedFeatures=0
         var pairCandidates=0
+        var sparsePreview=emptyList<SurveyDepth>()
         val fits=try{
             if(candidateFeatures.size>=2){
                 update("3/3 · ORB-Mehrbildmerkmale triangulieren und DA3 "+
@@ -375,6 +392,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 matchedFeatures=alignment.matchedFeatures
                 triangulatedFeatures=alignment.triangulatedFeatures
                 pairCandidates=alignment.pairsConsidered
+                sparsePreview=alignment.diagnosticPoints
                 alignment.fits
             }else emptyMap()
         }catch(t:Throwable){
@@ -446,8 +464,16 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 "Auswertung zeigt nur echte DA3-Tiefen und OpenVINS-Trajektorie; "+
                 "bitte mit ausreichender seitlicher Bewegung und Struktur scannen"
         }
+        if(sparsePreview.isNotEmpty() && cameraCalibration==null)
+            warnings+="ORB-Farbmerkmale trianguliert: "+
+                sparsePreview.size+" nur in unkalibrierter 3D-Diagnose, "+
+                "nicht in der persistenten DA3-Raumkarte gespeichert"
         File(folder,"openvins_da3_map_summary.json").writeText(
             JSONObject().put("source","Native OpenVINS + DA3 Small")
+                .put("sparse_orb_preview_points",sparsePreview.size)
+                .put("sparse_preview_unvalidated_not_persisted",true)
+                .put("sparse_preview_gate_passed",
+                    previewCalibration!=null)
                 .put("namespace","rflab_openvins_scan_v1.json")
                 .put("method","reciprocal ORB, native VIO ray triangulation, "+
                     "robust affine inverse-depth scale/shift, RGB voxel fusion")
@@ -481,6 +507,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("fused_keyframes",fusedFrames)
             .put("multiview_depth_aligned_keyframes",alignedFrames)
             .put("multiview_triangulations",triangulatedFeatures)
+            .put("sparse_orb_preview_points",sparsePreview.size)
+            .put("sparse_preview_unvalidated_not_persisted",true)
             .put("camera_geometry_gate_passed",
                 cameraEvidence?.allowedForExperimentalFusion?:false)
             .put("online_calibration_stable",
@@ -501,6 +529,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
         return Summary(folder,
             if(external.isNotEmpty()) external.size else poses?.poses?.size?:0,
             poses?.inliers?:0,done,paired,poses?.rejected?:0,
-            last,poses,warnings,external,fusedPoints,fusedFrames)
+            last,poses,warnings,external,fusedPoints,fusedFrames,
+            sparsePreview)
     }
 }
