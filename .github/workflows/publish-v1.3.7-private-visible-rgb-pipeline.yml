@@ -4,7 +4,7 @@ on:
   push:
     branches: [feature/embedded-openvins-v1.3]
     paths:
-      - .github/workflows/publish-v1.3.7-private-openvins-3d-diagnostics.yml
+      - .github/workflows/publish-v1.3.7-private-visible-rgb-pipeline.yml
   workflow_dispatch:
 
 permissions:
