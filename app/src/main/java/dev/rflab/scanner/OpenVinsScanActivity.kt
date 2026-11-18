@@ -322,7 +322,15 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             val health = VioInitializationHealth.read(counters, clocks)
             currentHealth = health
             diagnosticLabel.text = health.compact()
-            if (!health.initialized) {
+            // Native initialized=true is a latched state, not a live pose
+            // quality signal. Surface processing stalls while recording.
+            if(health.initialized && health.processedAgeMs!=null &&
+                health.processedAgeMs!!>1800.0) {
+                stateLabel.text="⚠ "+health.issue
+                detailLabel.text="Letzter VIO-Frame veraltet. "+
+                    "Aufnahme nicht für DA3-Mehrbildfusion geeignet; "+
+                    "Kamera/IMU-Neustart oder neue Aufnahme erforderlich."
+            }else if (!health.initialized) {
                 stateLabel.text = "○ " + health.issue
                 if (health.rawCamera >= 10 && health.fedImu >= 100 &&
                     health.processedCamera >= 10 &&
