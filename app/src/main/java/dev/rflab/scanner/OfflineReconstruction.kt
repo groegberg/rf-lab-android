@@ -303,6 +303,21 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     good[(good.size*.98).toInt().coerceAtMost(good.lastIndex)]
                     else 0f
                 val spread=(hi-lo).coerceAtLeast(1e-6f)
+                val geometryGateReason=when{
+                    external.isEmpty() -> "Keine native OpenVINS-Kamerapose"
+                    motionQuality?.acceptableForExperimentalGeometry!=true ->
+                        "VIO-Trajektorie physikalisch unplausibel"
+                    position<0 -> "Kein synchronisierter VIO-Zeitstempel"
+                    cameraCalibration==null && previewCalibration==null ->
+                        "Kamera-IMU-Kalibrierung nicht hinreichend bestätigt"
+                    frameCalibration==null -> "Online-Kamera-Kalibrierung fehlt"
+                    imageOrientation?.usableForFusion!=true ->
+                        "Geräteausrichtung/IMU-Schwerkraft unsicher"
+                    inference.cropPercent>=.70f ->
+                        "Zu viel Kamerabild im DA3-Crop verloren"
+                    good.size<100 -> "KI-Tiefenkarte enthält zu wenige Werte"
+                    else -> "Geometrische ORB-Merkmale werden geprüft"
+                }
                 // First successful DA3 image can be viewed in 3D immediately.
                 // No VIO pose, metric range or multi-view fusion is invented.
                 if(relativePreview.isEmpty() && good.size>=100){
@@ -407,6 +422,11 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         frameCalibration?.let{
                             JSONArray().put(it.fx).put(it.fy)
                         }?:JSONObject.NULL)
+                    .put("geometry_gate_reason",geometryGateReason)
+                    .put("orb_multiview_candidate",
+                        candidateFeatures.any{it.photoIndex==i})
+                    .put("unscaled_rgb_rays",
+                        candidateRays[i]?.size?:0)
                     .put("optical_pose_index",position)
                     .put("optical_pose_valid",
                         if(external.isNotEmpty()) position>=0
@@ -524,8 +544,18 @@ internal class OfflineReconstruction(private val context:android.content.Context
             warnings+="ORB-Farbmerkmale trianguliert: "+
                 sparsePreview.size+" nur in unkalibrierter 3D-Diagnose, "+
                 "nicht in der persistenten DA3-Raumkarte gespeichert"
+        // Track exact processing-stage rejection frequencies; users should
+        // see why their RGB/depth was not promoted into a room cloud.
+        val stageRejections=JSONObject()
+        for(index in 0 until manifest.length()){
+            val reason=manifest.optJSONObject(index)
+                ?.optString("geometry_gate_reason") ?:continue
+            stageRejections.put(reason,stageRejections.optInt(reason,0)+1)
+        }
         File(folder,"openvins_da3_map_summary.json").writeText(
             JSONObject().put("source","Native OpenVINS + DA3 Small")
+                .put("per_frame_geometry_gate_counts",stageRejections)
+                .put("orb_registered_keyframes",candidateRays.size)
                 .put("sparse_orb_preview_points",sparsePreview.size)
                 .put("relative_single_image_preview_points",
                     relativePreview.size)
@@ -541,7 +571,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("namespace","rflab_openvins_scan_v1.json")
                 .put("method","reciprocal ORB, native VIO ray triangulation, "+
                     "robust affine inverse-depth scale/shift, RGB voxel fusion")
-                .put("selected_pose_matched_rgb_frames",selected.size)
+                .put("selected_da3_rgb_frames",selected.size)
+                .put("rgb_frames_with_associated_vio_pose",paired)
                 .put("registered_keyframes",alignedFrames)
                 .put("colored_points",fusedPoints)
                 .put("matches_checked",matchedFeatures)
@@ -572,6 +603,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("multiview_depth_aligned_keyframes",alignedFrames)
             .put("multiview_triangulations",triangulatedFeatures)
             .put("sparse_orb_preview_points",sparsePreview.size)
+            .put("per_frame_geometry_gate_counts",stageRejections)
             .put("relative_single_image_preview_points",relativePreview.size)
             .put("multiview_research_preview_points",
                 multiViewResearchPreview.size)
@@ -592,9 +624,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("depth_maps",manifest)
             .put("warnings",JSONArray(warnings))
             .toString(2))
-        update("Fertig: "+done+" KI-Tiefenkarten, "+
-            alignedFrames+" geometrisch angeglichen, "+
-            fusedPoints+" RGB-3D-Punkte")
+        update("Fertig: "+done+" DA3-Bilder · "+
+            relativePreview.size+" relative RGB-3D-Punkte · "+
+            multiViewResearchPreview.size+" Mehrbild-Diagnosepunkte · "+
+            fusedPoints+" persistente Farbpunkte")
         return Summary(folder,
             if(external.isNotEmpty()) external.size else poses?.poses?.size?:0,
             poses?.inliers?:0,done,paired,poses?.rejected?:0,
