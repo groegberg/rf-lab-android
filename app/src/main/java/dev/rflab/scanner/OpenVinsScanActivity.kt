@@ -446,7 +446,27 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         pendingCalibrationExport=null
         if(resultCode!=RESULT_OK || session==null)return
         val uri=data?.data?:return
-        val report=diagnosticReport()
+        // The selected completed native session may have been recorded
+        // with a different preview size than the current Camera2 view.
+        // In the supplied ZIP the recording was 640x480, while the old
+        // ad-hoc live report incorrectly showed a reopened 640x360 view.
+        val cameraCapture=File(session,
+            "config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+        val cameraSeed=File(session,
+            "config/PIXEL_CALIBRATION_WARNING.txt")
+        val report=buildString {
+            appendLine("RF Lab – native OpenVINS session evidence")
+            appendLine("session="+session.name)
+            appendLine("Camera2 CaptureResult AS RECORDED:")
+            appendLine(if(cameraCapture.isFile)cameraCapture.readText()
+                else "Not recorded for this session")
+            appendLine("Camera2 geometry seed AS RECORDED:")
+            appendLine(if(cameraSeed.isFile)cameraSeed.readText()
+                else "Not recorded for this session")
+            appendLine("Online per-frame intrinsics, extrinsics and IMU "+
+                "offsets: vio_camera_trajectory.csv")
+            appendLine("No independently validated metric camera-IMU calibration")
+        }
         stateLabel.text="Messdaten werden als ZIP exportiert …"
         worker.execute {
             try {
