@@ -137,14 +137,18 @@ class OfflineReconstructionActivity:Activity() {
     }
 
     private fun show3dNativeTrajectory(
-        poses:List<ExternalVioTrajectory.Sample>) {
+        poses:List<ExternalVioTrajectory.Sample>,
+        sparse:List<SurveyDepth> = emptyList()) {
         if(poses.isEmpty())return
         val preview=RoomScanStore(this,"rflab_openvins_scan_v1.json")
         // Create a TRANSIENT 3D track, not a persisted artificial depth
         // map. Prevent mixing this session with any previous map origin.
         preview.start("OpenVINS · 3D native VIO trajectory")
-        preview.poseSource="OpenVINS native camera path only; "+
-            "no color depth; no validated metric calibration"
+        preview.poseSource=if(sparse.isNotEmpty())
+            "OpenVINS sparse diagnostic ORB multi-view; "+
+                "uncalibrated, in-memory only, NOT a DA3 room map"
+            else "OpenVINS native camera path only; "+
+                "no color depth; no validated metric calibration"
         val stride=(poses.size/1200).coerceAtLeast(1)
         poses.forEachIndexed { index,sample ->
             if(index%stride==0){
@@ -155,10 +159,14 @@ class OfflineReconstructionActivity:Activity() {
                 }
             }
         }
+        if(sparse.isNotEmpty())
+            sparse.chunked(1500).forEach{preview.addDepth(it)}
         cloud.store=preview
         cloud.visibility=View.VISIBLE
         trajectory.visibility=View.GONE
-        mapToggle.text="3D-Kamerapfad / 2D-Pfad"
+        mapToggle.text=if(sparse.isNotEmpty())
+            "3D-ORB-Diagnosepunkte / 2D-Pfad"
+            else "3D-Kamerapfad / 2D-Pfad"
         mapToggle.isEnabled=true
     }
 
@@ -195,7 +203,8 @@ class OfflineReconstructionActivity:Activity() {
                     }else if(result.externalVio.isNotEmpty()){
                         // Lack of calibrated depth MUST NOT hide the native
                         // 3D trajectory the user has already recorded.
-                        show3dNativeTrajectory(result.externalVio)
+                        show3dNativeTrajectory(
+                            result.externalVio,result.sparsePreview)
                     }
                     result.lastDepth?.let{depth.setImageBitmap(it)}
                     title.text="OFFLINE · ERGEBNIS"
@@ -210,12 +219,18 @@ class OfflineReconstructionActivity:Activity() {
                                 result.fusedPoints+" RGB-Farbpunkte aus "+
                                     result.fusedFrames+" Keyframes\n"+
                                     "Experimentelle Karte · Maßstab unvalidiert"
-                            else "3D-Kamerapfad ist vorhanden, aber KEINE Farbkarte.\n"+
-                                "Grund: "+(OpenVinsCameraEvidence.read(session)
+                            else (if(result.sparsePreview.isNotEmpty())
+                                result.sparsePreview.size.toString()+
+                                    " farbige ORB-3D-Merkmale als "+
+                                    "UNKALIBRIERTE Diagnosevorschau.\n"
+                                else "3D-Kamerapfad vorhanden, noch keine "+
+                                    "3D-Farbpunkte.\n")+
+                                "Keine DA3-Raumkarte. Grund: "+
+                                (OpenVinsCameraEvidence.read(session)
                                     .problems.firstOrNull()
                                     ?:result.warnings.lastOrNull()
                                     ?:"Unzureichende Multi-View-Triangulation")
-                                    .take(230)
+                                    .take(210)
                     }else{
                         result.da3Images.toString()+
                             " DA3-Bilder · "+result.pairedImages+
