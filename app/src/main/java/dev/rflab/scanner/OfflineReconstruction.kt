@@ -24,7 +24,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
                        val warnings:List<String>,
                        val externalVio:List<ExternalVioTrajectory.Sample> = emptyList(),
                        val fusedPoints:Int = 0, val fusedFrames:Int = 0,
-                       val sparsePreview:List<SurveyDepth> = emptyList())
+                       val sparsePreview:List<SurveyDepth> = emptyList(),
+                       val relativePreview:List<SurveyDepth> = emptyList(),
+                       val multiViewResearchPreview:List<SurveyDepth> = emptyList(),
+                       val motionQuality:VioMotionQuality.Report? = null)
 
     companion object {
         fun closestIndex(poses:List<OfflineVisualOdometry.Pose>,
@@ -46,7 +49,9 @@ internal class OfflineReconstruction(private val context:android.content.Context
         }
     }
 
-    fun run(session:File, update:(String)->Unit = {}):Summary {
+    fun run(session:File,
+            onRelativePreview:(List<SurveyDepth>)->Unit = {},
+            update:(String)->Unit = {}):Summary {
         val suffix=System.currentTimeMillis().toString()
         val folder=File(session,"offline_$suffix")
         require(folder.mkdirs()){"Cannot create offline run"}
@@ -109,6 +114,32 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("warnings",JSONArray(vioQuality.warnings))
                     .toString(2))
         }
+        // Reject physically impossible initialized native motion BEFORE geometry.
+        val motionQuality=if(external.isNotEmpty())
+            VioMotionQuality.inspect(external) else null
+        if(motionQuality!=null){
+            File(folder,"openvins_vio_motion_audit.json").writeText(
+                JSONObject().put("source","Native OpenVINS coarse drift plausibility")
+                    .put("acceptable_for_experimental_geometry",
+                        motionQuality.acceptableForExperimentalGeometry)
+                    .put("metric_calibration_verified",false)
+                    .put("duration_s",motionQuality.durationSeconds)
+                    .put("path_length_unvalidated",
+                        motionQuality.pathLengthUnvalidated)
+                    .put("displacement_unvalidated",
+                        motionQuality.displacementUnvalidated)
+                    .put("median_speed_unvalidated",
+                        motionQuality.medianSpeedUnitsPerSecond)
+                    .put("p90_speed_unvalidated",
+                        motionQuality.p90SpeedUnitsPerSecond)
+                    .put("maximum_speed_unvalidated",
+                        motionQuality.maxSpeedUnitsPerSecond)
+                    .put("rejection_reasons",JSONArray(motionQuality.reasons))
+                    .toString(2))
+            if(!motionQuality.acceptableForExperimentalGeometry)
+                warnings+="VIO-DRIFT: Mehrbild-Fusion gesperrt: "+
+                    motionQuality.reasons.joinToString(" · ")
+        }
         if(photos.isEmpty())warnings+="Keine hochauflösenden Fotos vorhanden"
         // Camera2 captures photos before OpenVINS initializes. In the
         // uploaded Pixel scan the first ~13 s have NO native camera pose.
@@ -156,7 +187,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
         }
         val cameraCalibration=if(
             cameraEvidence?.allowedForExperimentalFusion==true &&
-            onlineQuality?.acceptedForExperimentalFusion==true)
+            onlineQuality?.acceptedForExperimentalFusion==true &&
+            motionQuality?.acceptableForExperimentalGeometry==true)
             initialCalibration else null
         val seedText=File(session,
             "external_calibration/PIXEL_CALIBRATION_WARNING.txt")
@@ -166,7 +198,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
         // triangulations as a visibly marked, in-memory research preview.
         val previewCalibration=if(initialCalibration!=null &&
             OpenVinsSparsePreviewGate.allowed(
-                cameraEvidence,onlineQuality,seedText))
+                cameraEvidence,onlineQuality,seedText) &&
+            motionQuality?.acceptableForExperimentalGeometry==true)
             initialCalibration else null
         if(cameraEvidence!=null){
             File(folder,"camera_geometry_audit.json").writeText(JSONObject()
@@ -184,8 +217,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     cameraEvidence.problems.take(3).joinToString(" · ")
         }
         if(external.isNotEmpty() && cameraCalibration==null)
-            warnings+="Für OpenVINS/DA3 keine verlässliche Kamera-Geometrie; "+
-                "keine ungeprüften Farbflächen erzeugt"
+            warnings+="Kalibrierte DA3-Raumkarte gesperrt; "+
+                "stattdessen relative farbige 3D-Einzelbildvorschau"
         // Native ImageReader JPEGs are sensor-coordinate pixels. Align DA3
         // input orientation using measured IMU gravity and the recorded
         // camera<-IMU extrinsic, NEVER the landscape-locked UI orientation.
@@ -207,6 +240,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     " Posen mit exportierter Online-Kalibrierung; "+
                     "alte VIO-CSV-Formate werden nicht für 3D verwendet"
         }
+        var relativePreview=emptyList<SurveyDepth>()
         val candidateFeatures=ArrayList<OpenVinsDa3MultiView.Frame>()
         val candidateRays=HashMap<Int,List<OpenVinsDa3Fusion.RaySample>>()
         var fusedFrames=0
@@ -269,6 +303,20 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     good[(good.size*.98).toInt().coerceAtMost(good.lastIndex)]
                     else 0f
                 val spread=(hi-lo).coerceAtLeast(1e-6f)
+                // First successful DA3 image can be viewed in 3D immediately.
+                // No VIO pose, metric range or multi-view fusion is invented.
+                if(relativePreview.isEmpty() && good.size>=100){
+                    try {
+                        val candidate=OpenVinsDa3RelativePreview.make(inference)
+                        if(candidate.size>=100){
+                            relativePreview=candidate
+                            onRelativePreview(candidate)
+                        }
+                    }catch(t:Throwable){
+                        warnings+="DA3-Einzelbild-Punktwolke: "+
+                            (t.message?:t.javaClass.simpleName)
+                    }
+                }
                 // Keep sparse ORB features plus ~2k true RGB camera rays
                 // per frame. Do NOT apply an invented median depth scale.
                 // After all DA3 frames have run, fit inverse-depth scale/shift
@@ -294,7 +342,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                                 candidateFeatures.add(frame)
                                 // Do not use uncalibrated ORB previews as DA3
                                 // RGB-D room maps. This gate remains strict.
-                                if(cameraCalibration!=null){
+                                if(cameraCalibration!=null ||
+                                    previewCalibration!=null){
                                     val rays=OpenVinsDa3Fusion.sampleUnscaled(
                                         inference,external[position],frameCalibration,
                                         bounds.outWidth,bounds.outHeight,lo,hi)
@@ -403,6 +452,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
             candidateFeatures.forEach{it.close()}
         }
         val mapSamples=ArrayList<SurveyDepth>()
+        var multiViewResearchPreview=emptyList<SurveyDepth>()
         val quality=JSONArray()
         for((index,rays) in candidateRays.toSortedMap()){
             val fit=fits[index] ?: continue
@@ -432,7 +482,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
         // At least two independently aligned views are required; otherwise
         // there is no observable shared geometry, only a DA3 depth preview.
         if(mapSamples.size>=150 && alignedFrames>=2 && external.isNotEmpty()){
-            try{
+            if(cameraCalibration==null){
+                // Only a transient diagnostic cloud from real multi-view
+                // DA3 correspondences, never a stored calibrated room scan.
+                multiViewResearchPreview=mapSamples.take(60_000)
+                warnings+="Mehrbild-DA3-Farbpunkte als UNKALIBRIERTE "+
+                    "3D-Forschungsvorschau (nicht gespeichert)"
+            }else try{
                 update("3/3 · Verifizierte OpenVINS/DA3-Punkte fusionieren …")
                 val output=RoomScanStore(context,"rflab_openvins_scan_v1.json")
                 output.start("OpenVINS + DA3 " + suffix)
@@ -471,6 +527,14 @@ internal class OfflineReconstruction(private val context:android.content.Context
         File(folder,"openvins_da3_map_summary.json").writeText(
             JSONObject().put("source","Native OpenVINS + DA3 Small")
                 .put("sparse_orb_preview_points",sparsePreview.size)
+                .put("relative_single_image_preview_points",
+                    relativePreview.size)
+                .put("multiview_research_preview_points",
+                    multiViewResearchPreview.size)
+                .put("vio_motion_gate_passed",
+                    motionQuality?.acceptableForExperimentalGeometry?:false)
+                .put("vio_motion_rejection_reasons",
+                    JSONArray(motionQuality?.reasons?:emptyList()))
                 .put("sparse_preview_unvalidated_not_persisted",true)
                 .put("sparse_preview_gate_passed",
                     previewCalibration!=null)
@@ -508,6 +572,11 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("multiview_depth_aligned_keyframes",alignedFrames)
             .put("multiview_triangulations",triangulatedFeatures)
             .put("sparse_orb_preview_points",sparsePreview.size)
+            .put("relative_single_image_preview_points",relativePreview.size)
+            .put("multiview_research_preview_points",
+                multiViewResearchPreview.size)
+            .put("vio_motion_gate_passed",
+                motionQuality?.acceptableForExperimentalGeometry?:false)
             .put("sparse_preview_unvalidated_not_persisted",true)
             .put("camera_geometry_gate_passed",
                 cameraEvidence?.allowedForExperimentalFusion?:false)
@@ -530,6 +599,6 @@ internal class OfflineReconstruction(private val context:android.content.Context
             if(external.isNotEmpty()) external.size else poses?.poses?.size?:0,
             poses?.inliers?:0,done,paired,poses?.rejected?:0,
             last,poses,warnings,external,fusedPoints,fusedFrames,
-            sparsePreview)
+            sparsePreview,relativePreview,multiViewResearchPreview,motionQuality)
     }
 }
