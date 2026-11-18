@@ -564,7 +564,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("vio_motion_gate_passed",
                     motionQuality?.acceptableForExperimentalGeometry?:false)
                 .put("vio_motion_rejection_reasons",
-                    JSONArray(motionQuality?.reasons?:emptyList()))
+                    JSONArray(motionQuality?.reasons?:emptyList<String>()))
                 .put("sparse_preview_unvalidated_not_persisted",true)
                 .put("sparse_preview_gate_passed",
                     previewCalibration!=null)
