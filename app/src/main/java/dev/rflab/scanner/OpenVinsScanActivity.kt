@@ -418,7 +418,8 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             val (counts, times) = readNativeDiagnostics()
             VioInitializationHealth.read(counts, times)
         } catch (_: Throwable) { currentHealth }
-        return (current?.report() ?: "Native diagnostics unavailable") +
+        return (current?.report(recording) ?:
+            "Native diagnostics unavailable") +
             "\nRF Lab live VIO poses=" + scan.poseCount() +
             "\nRF Lab nativePoseSeen=" + nativePoseSeen +
             "\n" + cameraDiagnostics()
