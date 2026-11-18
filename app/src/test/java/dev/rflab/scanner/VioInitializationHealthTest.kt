@@ -40,6 +40,15 @@ class VioInitializationHealthTest {
             .issue.contains("zu langsam"))
     }
 
+    @Test fun latchedNativeInitializationDoesNotHideEightySecondVioStall(){
+        val stalled=status(initialized=1,camClock=1020046.0,
+            imuClock=1020046.196,processedClock=1019962.674,
+            nowClock=1020046.199)
+        assertTrue(stalled.issue.contains("steht"))
+        assertTrue(stalled.processedAgeMs!!>83_000)
+        assertTrue(stalled.report().contains("last_processed_age_ms="))
+    }
+
     @Test fun rawNativeReportExposesAllCountersForDiagnosis() {
         val s=status(expired=6,waitImu=12,initialized=0)
         val report=s.report()
