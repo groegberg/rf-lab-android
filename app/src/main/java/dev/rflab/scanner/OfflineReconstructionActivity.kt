@@ -216,7 +216,7 @@ class OfflineReconstructionActivity:Activity() {
                             diag.matchedPhotos+"/"+diag.photoCount+
                             " Fotos mit VIO-Pose\n"+
                             if(result.fusedPoints>=50)
-                                result.fusedPoints+" RGB-Farbpunkte aus "+
+                                result.fusedPoints.toString()+" RGB-Farbpunkte aus "+
                                     result.fusedFrames+" Keyframes\n"+
                                     "Experimentelle Karte · Maßstab unvalidiert"
                             else (if(result.sparsePreview.isNotEmpty())
