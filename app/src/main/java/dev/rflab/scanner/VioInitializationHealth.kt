@@ -32,6 +32,13 @@ internal class VioInitializationHealth private constructor(
         get() = if (lastCameraSec > 0 && nowBootSec > 0)
             (nowBootSec - lastCameraSec) * 1000.0 else null
 
+    // This is the timestamp of the last camera frame actually handled by
+    // the estimator, not the current Camera2 callback. A native MSCKF may
+    // remain initialized long after its output has stopped advancing.
+    val processedAgeMs: Double?
+        get() = if(lastProcessedSec>0 && nowBootSec>0)
+            (nowBootSec-lastProcessedSec)*1000.0 else null
+
     val issue: String get() = when {
         configErrors > 0 -> "Konfigurationsfehler – YAML/Camera2-Kalibrierung prüfen"
         rawCamera < 4 -> "Kein Kamerastream am VIO-Eingang"
@@ -43,6 +50,10 @@ internal class VioInitializationHealth private constructor(
         expiredCamera > 10 && expiredCamera > processedCamera ->
             "Bildverarbeitung zu langsam oder Kamera-Zeitbasis falsch"
         processedCamera < 3 -> "VIO verarbeitet noch keine Kameraframes"
+        initialized && processedAgeMs!=null && processedAgeMs!!>1800.0 ->
+            "VIO-Tracking steht: letzter verarbeiteter Frame "+
+                String.format(Locale.ROOT,"%.1f",processedAgeMs!!/1000.0)+
+                " s alt"
         !initialized -> "Kamera und IMU laufen · VIO wartet auf Ruhe/Initialisierung"
         else -> "Native OpenVINS-VIO initialisiert"
     }
@@ -53,7 +64,11 @@ internal class VioInitializationHealth private constructor(
         } ?: "n/a"
         return "Kamera " + rawCamera + " → Queue " + queuedCamera +
             " → VIO " + processedCamera + " · verworfen " + expiredCamera +
-            "\nIMU " + rawImu + " → VIO " + fedImu + " · Δ IMU–Cam " + gap
+            "\nIMU " + rawImu + " → VIO " + fedImu + " · Δ IMU–Cam " +
+            gap + (processedAgeMs?.let {
+                " · VIO-Frame-Alter " +
+                    String.format(Locale.ROOT,"%.0f",it)+" ms"
+            }?:"")
     }
 
     fun report(): String = buildString {
@@ -74,6 +89,8 @@ internal class VioInitializationHealth private constructor(
         appendLine("boot_clock_sec=" + nowBootSec)
         appendLine("imu_camera_delta_ms=" + (imuCameraDeltaMs ?: "unknown"))
         appendLine("camera_age_ms=" + (cameraAgeMs ?: "unknown"))
+        appendLine("last_processed_age_ms=" +
+            (processedAgeMs ?: "unknown"))
         appendLine("Note: live camera feature tracks do not prove VIO initialization")
         appendLine("Camera/IMU extrinsics and metric scale NOT validated for Pixel")
     }
