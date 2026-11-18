@@ -282,15 +282,15 @@ class OfflineReconstructionActivity:Activity() {
                                 result.multiViewResearchPreview.size>=50 ->
                                     result.multiViewResearchPreview.size.toString()+
                                     " RGB-Punkte aus Mehrbild-Fusion "+
-                                    "(Forschungsvorschau).\\n"
+                                    "(Forschungsvorschau).\n"
                                 result.relativePreview.size>=50 ->
                                     result.relativePreview.size.toString()+
                                     " RGB-Punkte aus DA3-Einzelbild-Tiefe "+
-                                    "(relative 2.5D-Vorschau).\\n"
+                                    "(relative 2.5D-Vorschau).\n"
                                 result.sparsePreview.isNotEmpty() ->
                                     result.sparsePreview.size.toString()+
-                                    " triangulierte ORB-RGB-Punkte.\\n"
-                                else -> "Noch keine 3D-Farbpunkte.\\n"
+                                    " triangulierte ORB-RGB-Punkte.\n"
+                                else -> "Noch keine 3D-Farbpunkte.\n"
                             })+
                                 "Keine kalibrierte Raumkarte. Grund: "+
                                 (result.motionQuality?.reasons?.firstOrNull()
