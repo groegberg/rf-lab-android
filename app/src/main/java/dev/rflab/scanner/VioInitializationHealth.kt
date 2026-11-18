@@ -71,10 +71,16 @@ internal class VioInitializationHealth private constructor(
             }?:"")
     }
 
-    fun report(): String = buildString {
+    /** The last processed timestamp is meaningful as a stall ONLY while
+     * capture is actively running. After stop, camera/IMU callbacks may
+     * continue but the estimator is intentionally no longer processing.
+     */
+    fun report(captureActive:Boolean=true): String = buildString {
         appendLine("RF LAB · OpenVINS Initialisierungsdiagnose")
         appendLine("Native initialized: " + initialized)
-        appendLine("Issue: " + issue)
+        appendLine("recording_active_at_diagnostic=" + captureActive)
+        appendLine("Issue: " + if(captureActive)issue
+            else "Aufnahme beendet; alter VIO-Frame nach Stop ist normal")
         appendLine("camera_received=" + rawCamera)
         appendLine("camera_queued=" + queuedCamera)
         appendLine("camera_processed=" + processedCamera)
