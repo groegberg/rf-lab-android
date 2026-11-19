@@ -149,9 +149,12 @@ internal class Da3DepthEngine(private val context: Context) : AutoCloseable {
 internal object RelativeDepthVisual {
     fun render(depth: FloatArray, width: Int, height: Int): Bitmap {
         require(depth.size == width * height)
+        // This exact DA3-Small LiteRT export predicts relative depth
+        // (small = near, large = far). Do NOT invert as in older disparity
+        // models; maintain the same semantics across preview and fusion.
         val positive = depth.asSequence()
             .filter { it.isFinite() && it > 0f }
-            .map { 1f / it }.toList().sorted()
+            .toList().sorted()
         val output = IntArray(depth.size) { Color.rgb(32, 39, 54) }
         if (positive.size > 20) {
             val lo = positive[(positive.size * .02).toInt()]
@@ -161,9 +164,9 @@ internal object RelativeDepthVisual {
             for (i in depth.indices) {
                 val d = depth[i]
                 if (!d.isFinite() || d <= 0f) continue
-                val t = ((1f / d - lo) / range).coerceIn(0f, 1f)
-                // Near = warm, far = cool; contrast-preserving percentile scale.
-                val hue = (235f - t * 230f).coerceIn(0f, 260f)
+                val t = ((d - lo) / range).coerceIn(0f, 1f)
+                // Near = warm, far = cool. Actual DA3 depth, no reciprocal.
+                val hue = (5f + t * 230f).coerceIn(0f, 260f)
                 output[i] = Color.HSVToColor(floatArrayOf(hue, .82f, .96f))
             }
         }
