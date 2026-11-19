@@ -51,6 +51,10 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
     private var auditMaxIso = 0
     private var auditMaxFrameDurationMs = Double.NaN
     private var auditFramesBelow20Hz = 0
+    private var auditRecentSlow = IntArray(90)
+    private var auditRecentIndex = 0
+    private var auditRecentSamples = 0
+    private var auditRecentSlowCount = 0
     private var auditAeFpsRange = "UNKNOWN"
 
     private fun resetCameraAudit() {
@@ -73,6 +77,10 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
         auditMaxIso=0
         auditMaxFrameDurationMs=Double.NaN
         auditFramesBelow20Hz=0
+        auditRecentSlow.fill(0)
+        auditRecentIndex=0
+        auditRecentSamples=0
+        auditRecentSlowCount=0
         auditAeFpsRange="UNKNOWN"
     }
 
@@ -137,10 +145,12 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
                 appendLine("max_sensor_frame_duration_ms="+
                     auditMaxFrameDurationMs)
                 appendLine("sensor_frames_below_20_hz="+auditFramesBelow20Hz)
+                appendLine("recent_camera_frames_below_20_hz="+auditRecentSlowCount)
+                appendLine("recent_camera_window_length="+auditRecentSamples)
                 appendLine("actual_ae_target_fps_range="+auditAeFpsRange)
                 appendLine("possible_low_light_frame_rate_slowdown="+
-                    (auditCaptures>=20 &&
-                     auditFramesBelow20Hz>auditCaptures/3))
+                    (auditRecentSamples>=30 &&
+                     auditRecentSlowCount>auditRecentSamples/3))
                 appendLine("calibration_source=approximate_camera2_seed_not_kalibr")
                 appendLine("online_openvins_calibration_exported=false")
                 appendLine("metric_calibration_verified=false")
@@ -209,7 +219,16 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
                     val ms=ns/1e6
                     auditMaxFrameDurationMs=if(auditMaxFrameDurationMs.isFinite())
                         maxOf(auditMaxFrameDurationMs,ms) else ms
-                    if(ms>50.0)auditFramesBelow20Hz++
+                    val slow=if(ms>50.0)1 else 0
+                    if(slow==1)auditFramesBelow20Hz++
+                    if(auditRecentSamples>=auditRecentSlow.size)
+                        auditRecentSlowCount-=
+                            auditRecentSlow[auditRecentIndex]
+                    else auditRecentSamples++
+                    auditRecentSlow[auditRecentIndex]=slow
+                    auditRecentSlowCount+=slow
+                    auditRecentIndex=
+                        (auditRecentIndex+1)%auditRecentSlow.size
                 }
             }
             auditAeFpsRange=result.get(
@@ -220,7 +239,8 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
             // once per ~second. Avoid creating the very VIO lag we audit.
             val warning=auditPhysicalChanged ||
                 auditMaxFocalDrift>.01 || auditMaxFocusDrift>.05 ||
-                (auditCaptures>=60 && auditFramesBelow20Hz>auditCaptures/3)
+                (auditRecentSamples>=30 &&
+                 auditRecentSlowCount>auditRecentSamples/3)
             if(auditCaptures<=2 || auditCaptures%30==0 ||
                 (warning && !auditWarningAlreadySaved))writeCameraAudit()
             if(warning)auditWarningAlreadySaved=true
