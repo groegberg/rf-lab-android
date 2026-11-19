@@ -272,6 +272,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
             ArrayList<OpenVinsDa3DiagnosticWorld.Frame>()
         var fusedFrames=0
         var done=0;var paired=0
+        var insufficientRgbForGeometry=0
+        var minimumRgbMedian=255
         var last:android.graphics.Bitmap?=null
         var ai:Da3DepthEngine?=null
         val manifest=JSONArray()
@@ -296,6 +298,17 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     jpeg,0,jpeg.size,jpegBounds)
                 val sourceWidth=jpegBounds.outWidth
                 val sourceHeight=jpegBounds.outHeight
+                // The uploaded 22:03 Pixel run was almost black and VIO
+                // dropped to ~15 Hz. Measure original sensor JPEG quality
+                // BEFORE AI crop/model brightness normalization.
+                val rgbQuality=try{
+                    OpenVinsRgbCaptureQuality.inspectJpeg(jpeg)
+                }catch(_:Exception){null}
+                if(rgbQuality?.usableForMultiView==false)
+                    insufficientRgbForGeometry++
+                if(rgbQuality!=null)
+                    minimumRgbMedian=minOf(minimumRgbMedian,
+                        rgbQuality.medianLuma)
                 val correctedRotation=online?.rotationCamFromImu()
                     ?:rotationMatrix
                 // Online temporal calibration relates the clocks by
@@ -346,6 +359,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     motionQuality?.acceptableForExperimentalGeometry!=true ->
                         "VIO-Trajektorie physikalisch unplausibel"
                     photoPose==null -> "Keine interpolierbare VIO-Pose zum Belichtungszeitpunkt"
+                    rgbQuality?.usableForMultiView==false ->
+                        "Zu dunkles oder unstrukturiertes RGB für zuverlässige Mehrbildmerkmale"
                     cameraCalibration==null && previewCalibration==null ->
                         "Kamera-IMU-Kalibrierung nicht hinreichend bestätigt"
                     frameCalibration==null -> "Online-Kamera-Kalibrierung fehlt"
@@ -406,6 +421,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // Fit DIRECT relative-depth scale/shift against actual optical Z
                 // from triangulated native VIO camera baselines.
                 if(frameCalibration!=null && photoPose!=null &&
+                    rgbQuality?.usableForMultiView!=false &&
                     imageOrientation?.usableForFusion==true &&
                     inference.cropPercent<.70f && good.size>=100){
                     try {
@@ -455,6 +471,16 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("input_photo",photo.jpeg.name)
                     .put("da3_output_kind","affine_invariant_relative_depth")
                     .put("raw_depth_reciprocal_applied",false)
+                    .put("rgb_median_luma_0_255",
+                        rgbQuality?.medianLuma?:JSONObject.NULL)
+                    .put("rgb_near_black_fraction",
+                        rgbQuality?.nearBlackFraction?:JSONObject.NULL)
+                    .put("rgb_gradient_contrast",
+                        rgbQuality?.gradientContrast?:JSONObject.NULL)
+                    .put("rgb_usable_for_multiview",
+                        rgbQuality?.usableForMultiView?:false)
+                    .put("rgb_quality_warnings",
+                        JSONArray(rgbQuality?.warnings?:emptyList<String>()))
                     .put("effective_camera_intrinsics_used_for_preview",
                         (frameCalibration?:initialCalibration)?.compatibleWith(
                             sourceWidth,sourceHeight)?:false)
@@ -527,6 +553,12 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 done++
             }
         }finally{ai?.close()}
+        if(insufficientRgbForGeometry>0)
+            warnings+=insufficientRgbForGeometry.toString()+
+                " RGB-Fotos unterbelichtet/strukturschwach: "+
+                "nur Einzelbild-DA3, keine ORB-Kartenfusion. "+
+                "Bitte heller aufnehmen (schlechtester Median "+
+                minimumRgbMedian+"/255)."
         var fusedPoints=0
         var alignedFrames=0
         var matchedFeatures=0
@@ -701,6 +733,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("method","reciprocal ORB, native VIO ray triangulation, "+
                     "robust direct relative-depth scale/shift, RGB voxel fusion")
                 .put("selected_da3_rgb_frames",selected.size)
+                .put("rgb_frames_rejected_for_low_light_or_no_structure",
+                    insufficientRgbForGeometry)
+                .put("rgb_median_luma_minimum",
+                    if(minimumRgbMedian<255)minimumRgbMedian else JSONObject.NULL)
                 .put("rgb_frames_with_associated_vio_pose",paired)
                 .put("registered_keyframes",alignedFrames)
                 .put("colored_points",fusedPoints)
