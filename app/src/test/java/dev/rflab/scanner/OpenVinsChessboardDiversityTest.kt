@@ -38,4 +38,19 @@ class OpenVinsChessboardDiversityTest {
             view.boardAreaFraction,1e-9)
         assertEquals(0.0,view.obliqueness,1e-9)
     }
+    @Test fun perspectiveForeshorteningCountsEvenWithoutSkew(){
+        val corners=(0 until 6).flatMap{r->
+            val t=r/5.0
+            val left=120.0+30.0*t
+            val edge=240.0-60.0*t
+            (0 until 9).map{c->
+                (left+edge*c/8.0) to (80.0+150.0*t)
+            }
+        }
+        val view=OpenVinsChessboardDiversity.view(
+            corners,640,480)!!
+        assertTrue("Perspective view must be observable",
+            view.obliqueness>.15)
+    }
+
 }
