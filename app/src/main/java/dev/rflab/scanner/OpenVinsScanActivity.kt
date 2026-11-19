@@ -60,6 +60,9 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private var lastUiNs = 0L
     private var lastSavedNs = 0L
     private var lastDiagNs = 0L
+    private var lastLightAuditNs = 0L
+    private var captureFpsSlowdown = false
+    private var maxExposureMs:Double?=null
     private var currentHealth: VioInitializationHealth? = null
     private var latestPosition: FloatArray? = null
     private var latestQuaternion: DoubleArray? = null
@@ -334,7 +337,32 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             val (counters, clocks) = readNativeDiagnostics()
             val health = VioInitializationHealth.read(counters, clocks)
             currentHealth = health
-            diagnosticLabel.text = health.compact()
+            // The capture callback reports REAL exposure/frame duration,
+            // not just requested fps. Read only every ~2s to avoid IO in
+            // the VIO frame callback and show a useful low-light warning.
+            if(nowNs-lastLightAuditNs>2_000_000_000L){
+                lastLightAuditNs=nowNs
+                val evidence=getExternalFilesDir(null)?.let{
+                    File(it,"config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+                }
+                if(evidence?.isFile==true && evidence.length()<20_000L){
+                    val kv=evidence.readLines().mapNotNull{line->
+                        val sep=line.indexOf('=')
+                        if(sep>0)line.substring(0,sep) to
+                            line.substring(sep+1) else null
+                    }.toMap()
+                    captureFpsSlowdown=kv[
+                        "possible_low_light_frame_rate_slowdown"]=="true"
+                    maxExposureMs=kv["max_actual_exposure_ms"]
+                        ?.toDoubleOrNull()?.takeIf{it.isFinite()}
+                }
+            }
+            diagnosticLabel.text=health.compact()+
+                (if(captureFpsSlowdown)
+                    "\n⚠ Kamera <20 Hz in vielen Frames; "+
+                    "mehr Raumlicht, langsam bewegen. Max Belichtung "+
+                    (maxExposureMs?.toInt()?.toString()?:"?")+" ms."
+                else "")
             // Native initialized=true is a latched state, not a live pose
             // quality signal. Surface processing stalls while recording.
             if(health.initialized && health.processedAgeMs!=null &&
