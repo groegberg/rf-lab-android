@@ -34,7 +34,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
         val depth:File,val pose:Int,val rotation:Int,
         val gate:String,val worldProjected:Boolean,
         val dominantPlaneFraction:Double,
-        val medianRgbLuma:Int,val rgbUsableForGeometry:Boolean
+        val medianRgbLuma:Int,val rgbUsableForGeometry:Boolean,
+        val alignedRgbCloud:File?,val alignmentInliers:Int
     )
 
     private val bg=Color.rgb(9,18,30)
@@ -51,6 +52,9 @@ class OpenVinsDepthBrowserActivity:Activity() {
     private lateinit var seek:SeekBar
     private lateinit var one:Button
     private lateinit var all:Button
+    private lateinit var depthRelativeButton:Button
+    private lateinit var depthAlignedButton:Button
+    private var showAlignedDepth=true
     private var photos:List<Photo> = emptyList()
     private var worldFile:File?=null
     private var worldImages=0
@@ -109,6 +113,10 @@ class OpenVinsDepthBrowserActivity:Activity() {
                 !inputName.matches(Regex("img_[0-9]{4}\\.jpg")))continue
             val file=File(folder,relative)
             if(!file.isFile)continue
+            val alignedName=item.optString("aligned_rgb_cloud_file","")
+            val alignedFile=if(alignedName.matches(
+                    Regex("aligned_[0-9]{4}\\.rgbxyz")))
+                File(folder,alignedName).takeIf{it.isFile} else null
             images.add(Photo(item.optInt("source_photo_index",i),
                 inputName,file,File(folder,depthName),
                 item.optInt("optical_pose_index",-1),
@@ -117,7 +125,10 @@ class OpenVinsDepthBrowserActivity:Activity() {
                 item.optBoolean("diagnostic_world_pose_projected",false),
                 item.optDouble("dominant_plane_support_fraction",Double.NaN),
                 item.optInt("rgb_median_luma_0_255",-1),
-                item.optBoolean("rgb_usable_for_multiview",false)))
+                item.optBoolean("rgb_usable_for_multiview",false),
+                alignedFile,
+                item.optJSONObject("direct_relative_depth_alignment")
+                    ?.optInt("inliers",0)?:0))
         }
         photos=images.sortedBy{it.ordinal}
         worldFile=File(folder,"vio_world_diagnostic.rgbxyz")
@@ -165,6 +176,26 @@ class OpenVinsDepthBrowserActivity:Activity() {
             leftMargin=dp(6)
         })
         root.addView(tabs)
+        val depthModes=LinearLayout(this).apply{
+            orientation=LinearLayout.HORIZONTAL
+        }
+        depthRelativeButton=button("DA3 relativ"){
+            showAlignedDepth=false
+            worldMode=false
+            display()
+        }
+        depthAlignedButton=button("ORB-angepasst"){
+            showAlignedDepth=true
+            worldMode=false
+            display()
+        }
+        depthModes.addView(depthRelativeButton,
+            LinearLayout.LayoutParams(0,dp(38),1f))
+        depthModes.addView(depthAlignedButton,
+            LinearLayout.LayoutParams(0,dp(38),1f).apply{
+                leftMargin=dp(6)
+            })
+        root.addView(depthModes)
 
         headline=text("",12f).apply{setPadding(dp(4),dp(7),dp(4),dp(3))}
         root.addView(headline,LinearLayout.LayoutParams(-1,dp(52)))
@@ -242,6 +273,16 @@ class OpenVinsDepthBrowserActivity:Activity() {
     private fun display(){
         val w=worldMode
         val id=++generation
+        val selected=photos.getOrNull(current)
+        val aligned=w.not() && showAlignedDepth &&
+            selected?.alignedRgbCloud!=null
+        depthRelativeButton.isEnabled=!w && aligned
+        depthAlignedButton.isEnabled=!w &&
+            selected?.alignedRgbCloud!=null && !aligned
+        depthRelativeButton.text=if(!w && !aligned)
+            "● DA3 relativ" else "DA3 relativ"
+        depthAlignedButton.text=if(aligned)
+            "● ORB-angepasst" else "ORB-angepasst"
         one.isEnabled=w
         all.isEnabled=!w && worldFile!=null
         previous.isEnabled=!w && current>0
@@ -260,7 +301,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
         }else{
             val frame=photos.getOrNull(current)
             headline.text=if(frame!=null)
-                "BILD "+(current+1)+"/"+photos.size+" · "+frame.imageName+
+                "BILD "+(current+1)+"/"+photos.size+" · "+
+                    (if(aligned)"ORB-TIEFE" else "DA3 RELATIV")+
                     " · DA3 "+frame.rotation+"°"
                 else "Keine DA3-3D-Einzelbilder in dieser Auswertung"
             warning.text=if(frame!=null)
@@ -273,6 +315,11 @@ class OpenVinsDepthBrowserActivity:Activity() {
                         "Ebenenanteil "+
                             (frame.dominantPlaneFraction*100).toInt()+
                             "% (nur Diagnose). " else "")+
+                    (if(aligned)
+                        "ORB: "+frame.alignmentInliers+
+                            " Inlier, VIO-Skala nicht validiert. "
+                    else if(frame.alignedRgbCloud!=null)
+                        "Vergleich mit ORB-Tiefe möglich. " else "")+
                     (if(frame.medianRgbLuma>=0)
                         "RGB "+frame.medianRgbLuma+"/255. " else "")+
                     (if(frame.medianRgbLuma>=0 &&
@@ -285,7 +332,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
         }
         io.execute {
             try{
-                val dataset=if(w)worldFile else photos.getOrNull(current)?.cloud
+                val dataset=if(w)worldFile else if(aligned)
+                    selected?.alignedRgbCloud else selected?.cloud
                 val points=dataset?.let{OpenVinsRgbCloudCache.read(it)}
                     ?:emptyList()
                 val preview=RoomScanStore(applicationContext,
@@ -295,6 +343,9 @@ class OpenVinsDepthBrowserActivity:Activity() {
                 preview.poseSource=if(w)
                     "OpenVINS DA3 WORLD DIAGNOSTIC; all posed photos; "+
                         "nonmetric/unverified"
+                    else if(aligned)
+                        "OpenVINS ORB aligned per-photo DA3 RGB; "+
+                            "unvalidated VIO units; nonmetric"
                     else "DA3 RELATIVE SINGLE-VIEW; camera-local 2.5D; nonmetric"
                 if(w){
                     val trajectory=poses.mapNotNull{
