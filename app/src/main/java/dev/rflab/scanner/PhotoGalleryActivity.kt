@@ -107,6 +107,9 @@ class PhotoGalleryActivity: Activity() {
                 putExtra("photo_session",session.name)
             })
         },LinearLayout.LayoutParams(-1,dp(52)))
+        root.addView(button("Schachbrett-Kamerakalibrierung prüfen"){
+            evaluateCameraCheckerboard()
+        },LinearLayout.LayoutParams(-1,dp(44)))
         val scroll=ScrollView(this).apply{isFillViewport=true}
         grid=GridLayout(this).apply{
             columnCount=3
@@ -171,6 +174,58 @@ class PhotoGalleryActivity: Activity() {
             grid.addView(tile,spec)
         }
     }
+    private fun evaluateCameraCheckerboard(){
+        val snapshot=session
+        val files=store.frames(snapshot).map{it.jpeg}
+        if(files.size<10){
+            AlertDialog.Builder(this).setTitle("Kamera-Kalibrierung")
+                .setMessage("Mindestens 10 Fotos eines planen Schachbretts "+
+                    "mit 10×7 Feldern (9×6 innere Ecken) aufnehmen, "+
+                    "aus verschiedenen Winkeln und Bildpositionen. "+
+                    "Die Kamera-IMU-Extrinsik wird damit noch nicht kalibriert.")
+                .setPositiveButton("OK",null).show()
+            return
+        }
+        summary.text="Schachbrett: Kameraintrinsik und Reprojektion prüfen …"
+        writer.execute {
+            try{
+                val report=OpenVinsCheckerboardCalibration.estimate(files)
+                File(snapshot,"checkerboard_intrinsics_audit.json")
+                    .writeText(report.json().toString(2))
+                val message="Erkannte Muster: "+report.detected+"/"+
+                    report.tested+"\\nRMS: "+
+                    (report.rmsReprojectionPx?.let{
+                        String.format(java.util.Locale.GERMANY,"%.2f px",it)
+                    }?:"nicht bestimmbar")+
+                    "\\nKamera-Parameter: "+
+                    if(report.sufficientForCameraIntrinsics)
+                        "Kandidat berechnet, noch unabhängig prüfen."
+                    else "unzureichend; mehr variable Musterfotos nötig."
+                runOnUiThread{
+                    if(!isFinishing && !isDestroyed){
+                        refresh()
+                        AlertDialog.Builder(this)
+                            .setTitle("Kamera-Kalibrierungsdiagnose")
+                            .setMessage(message+
+                                "\\n\\nIMU-Rotation, Hebelarm und Sensorzeitoffset "+
+                                "sind NICHT kalibriert. JSON im ZIP-Export.")
+                            .setPositiveButton("OK",null).show()
+                    }
+                }
+            }catch(e:Exception){
+                runOnUiThread{
+                    if(!isFinishing && !isDestroyed){
+                        refresh()
+                        AlertDialog.Builder(this)
+                            .setTitle("Kalibrierung fehlgeschlagen")
+                            .setMessage(e.message?:e.javaClass.simpleName)
+                            .setPositiveButton("OK",null).show()
+                    }
+                }
+            }
+        }
+    }
+
     private fun openPhoto(index:Int){
         startActivity(Intent(this,PhotoReviewActivity::class.java).apply{
             putExtra("photo_session",session.name)
