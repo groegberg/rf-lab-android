@@ -9,6 +9,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val parallelPixelTest = providers.gradleProperty("rfLabParallelTest").orNull == "true"
+val sourceRevision = providers.gradleProperty("rfLabSourceRevision")
+    .orElse(providers.environmentVariable("GITHUB_SHA")).orNull
+val revisionLabel = sourceRevision?.takeIf { it.matches(Regex("[0-9a-fA-F]{40}")) }?.take(8)
+
 android {
     namespace = "dev.rflab.scanner"
     compileSdk = 36
@@ -16,11 +21,21 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.3.2-openvins-init-diagnostics-dev"
+        versionCode = 25
+        versionName = listOfNotNull("1.3.9-qa.1", revisionLabel).joinToString("+")
+        manifestPlaceholders["rfLabLabel"] = "RF Lab"
         // Pixel 10 Pro XL: bundle only 64-bit ARM native OpenCV/LiteRT.
         ndk { abiFilters += "arm64-v8a" }
     }
+    buildTypes {
+        getByName("debug") {
+            if (parallelPixelTest) {
+                applicationIdSuffix = ".pixeltest"
+                manifestPlaceholders["rfLabLabel"] = "RF Lab Test"
+            }
+        }
+    }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

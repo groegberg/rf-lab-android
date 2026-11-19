@@ -788,6 +788,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .toString(2))
         File(folder,"manifest.json").writeText(JSONObject()
             .put("schema","rflab-offline-da3-pose-bundle-v1")
+            .put("app_version",BuildConfig.VERSION_NAME)
+            .put("app_version_code",BuildConfig.VERSION_CODE)
             .put("images_processed",done)
             .put("photos_with_nearby_optical_pose",paired)
             .put("input_photos",selected.size)

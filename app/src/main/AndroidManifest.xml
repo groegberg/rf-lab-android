@@ -11,7 +11,7 @@
     <uses-feature android:name="android.hardware.wifi" android:required="false"/>
     <uses-feature android:name="android.hardware.camera.ar" android:required="false"/>
     <uses-feature android:name="android.hardware.uwb" android:required="false"/>
-    <application android:label="RF Lab" android:allowBackup="false" android:theme="@style/Theme.RFLab">
+    <application android:label="${rfLabLabel}" android:allowBackup="false" android:theme="@style/Theme.RFLab">
         <meta-data android:name="com.google.ar.core" android:value="optional"/>
         <activity android:name=".AcousticLabActivity" android:exported="false"/>
         <activity android:name=".SpatialScanActivity" android:exported="false"/>

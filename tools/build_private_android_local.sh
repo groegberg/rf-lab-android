@@ -18,6 +18,9 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 gradle_command="${GRADLE_COMMAND:-gradle}"
+source_revision="$(git rev-parse HEAD)"
+export ORG_GRADLE_PROJECT_rfLabParallelTest=true
+export ORG_GRADLE_PROJECT_rfLabSourceRevision="$source_revision"
 if [[ ! -x "$(command -v "$gradle_command" 2>/dev/null || true)" ]]; then
   echo "Gradle 8.13 must be installed and in PATH; export GRADLE_COMMAND if needed." >&2
   exit 2
@@ -30,7 +33,7 @@ if [[ -z "$sdkmanager" ]]; then
   exit 2
 fi
 "$sdkmanager" --install "platforms;android-36" "build-tools;35.0.0" \
-  "platform-tools" "ndk;28.2.13676358" "cmake;3.18.1"
+  "platform-tools" "ndk;28.2.13676358" "cmake;3.22.1"
 
 echo "[1/5] Preparing pinned native OpenVINS (GPLv3)"
 python3 tools/bootstrap_embedded_openvins.py
@@ -52,6 +55,9 @@ unzip -l "$apk" | grep -F 'assets/vio_config/estimator_config.yaml'
 python3 tools/check_android_native_dependencies.py "$apk"
 python3 tools/check_elf_16k.py "$apk" --strict
 "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$apk"
+"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"
+"$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" |
+  grep -F "package: name='dev.rflab.scanner.pixeltest' versionCode='25' versionName='1.3.9-qa.1+${ORG_GRADLE_PROJECT_rfLabSourceRevision:0:8}'"
 
 echo "[5/5] Copy verified PRIVATE Pixel APK"
 out_dir=private-build

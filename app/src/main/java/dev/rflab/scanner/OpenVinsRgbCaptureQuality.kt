@@ -41,17 +41,20 @@ internal object OpenVinsRgbCaptureQuality {
             if(count>half){median=i;break}
         }
         val black=nearBlack.toDouble()/pixels.size
-        var contrast=0.0
-        var adjacent=0
-        // Subsampled gradient energy, independent of camera JPEG size.
-        for(y in 1 until height step 2)
-            for(x in 1 until width step 2){
-                val i=y*width+x
-                contrast+=abs(luminance[i]-luminance[i-1])
-                contrast+=abs(luminance[i]-luminance[i-width])
-                adjacent+=2
+        // The JPEG is already downsampled. Skipping every second position
+        // here can miss every edge of an otherwise well-lit checkerboard.
+        var contrastSum = 0L
+        for (y in 0 until height) {
+            val start = y * width
+            for (i in start + 1 until start + width) {
+                contrastSum += abs(luminance[i] - luminance[i - 1])
             }
-        val gradient=if(adjacent>0)contrast/adjacent else 0.0
+        }
+        for (i in width until luminance.size) {
+            contrastSum += abs(luminance[i] - luminance[i - width])
+        }
+        val adjacentPairs = (width - 1L) * height + (height - 1L) * width
+        val gradient = contrastSum.toDouble() / adjacentPairs
         val warnings=ArrayList<String>()
         if(median<35 || black>.62)
             warnings+="RGB-Kamera stark unterbelichtet; bitte Raumlicht einschalten"
