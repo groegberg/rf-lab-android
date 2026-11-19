@@ -225,6 +225,28 @@ internal class OfflineReconstruction(private val context:android.content.Context
         // camera<-IMU extrinsic, NEVER the landscape-locked UI orientation.
         val imu=if(external.isNotEmpty())
             OpenVinsImageOrientation.readImu(session) else emptyList()
+        if(external.isNotEmpty()){
+            val imuAudit=OpenVinsImuQualityAudit.inspect(imu)
+            File(folder,"openvins_imu_quality_audit.json").writeText(
+                JSONObject()
+                    .put("source","raw Android gyro and accelerometer")
+                    .put("samples",imuAudit.samples)
+                    .put("median_sample_hz",imuAudit.medianHz)
+                    .put("max_timestamp_gap_ms",imuAudit.maxGapMs)
+                    .put("stationary_windows",imuAudit.stationaryWindows)
+                    .put("checked_windows",imuAudit.checkedWindows)
+                    .put("stationary_gyro_mean_rad_s",
+                        JSONArray(imuAudit.stationaryGyroBiasRadS))
+                    .put("stationary_acceleration_norm",
+                        imuAudit.stationaryAccelerationMagnitude
+                            ?:JSONObject.NULL)
+                    .put("camera_imu_extrinsics_verified",false)
+                    .put("imu_noise_density_calibrated",false)
+                    .put("gyro_bias_complete_calibration",false)
+                    .put("warnings",JSONArray(imuAudit.warnings))
+                    .toString(2))
+            warnings+=imuAudit.warnings
+        }
         val rotationMatrix=if(external.isNotEmpty())
             File(session,"external_calibration/kalibr_imucam_chain.yaml")
                 .takeIf{it.isFile}?.let{
