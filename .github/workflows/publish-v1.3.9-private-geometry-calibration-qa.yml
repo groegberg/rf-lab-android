@@ -1,0 +1,134 @@
+name: Publish RF Lab v1.3.9 private Pixel geometry calibration QA APK
+
+# Trigger only on workflow creation/explicit invocation; release is immutable.
+on:
+  push:
+    branches: [feature/embedded-openvins-v1.3]
+    paths:
+      - .github/workflows/publish-v1.3.9-private-geometry-calibration-qa.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# The test release must match one immutable, fully verified source commit.
+concurrency:
+  group: rflab-v139-private-3d-diagnostic-release
+  cancel-in-progress: true
+
+jobs:
+  verified-private-pixel-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK, NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;28.2.13676358" "cmake;3.18.1"
+      # Previous release runner failed before checkout because the Gradle
+      # composite action tarball timed out from codeload.github.com.
+      # Fetch the official Gradle 8.13 distribution and verify its SHA256
+      # instead, avoiding dependency on a third-party action download.
+      - name: Install verified Gradle 8.13 (no GitHub action tarball)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          mkdir -p "$RUNNER_TEMP/rflab-gradle"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 500 \
+            "$base" -o "$RUNNER_TEMP/rflab-gradle/gradle.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 120 \
+            "$base.sha256" -o "$RUNNER_TEMP/rflab-gradle/gradle.sha256"
+          (cd "$RUNNER_TEMP/rflab-gradle" && \
+            echo "$(cat gradle.sha256)  gradle.zip" | sha256sum --check)
+          unzip -q "$RUNNER_TEMP/rflab-gradle/gradle.zip" \
+            -d "$RUNNER_TEMP/rflab-gradle"
+          echo "$RUNNER_TEMP/rflab-gradle/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Prepare pinned real native GPLv3 OpenVINS and 16 KiB libraries
+        run: |
+          set -euo pipefail
+          python3 tools/bootstrap_embedded_openvins.py
+          bash tools/rebuild_boost_android_16k.sh
+      - name: Kotlin unit tests including multi-view geometry
+        run: gradle --stacktrace --no-daemon :app:testDebugUnitTest
+      - name: Validate Alexa contract
+        run: node integrations/alexa/messageFactory.test.mjs
+      - name: Assemble complete Android debug APK
+        run: gradle --stacktrace --no-daemon :app:assembleDebug
+      - name: Verify actual OpenVINS native library, dependencies and 16 KiB format
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          unzip -l "$apk" | grep 'lib/arm64-v8a/libnative-lib.so'
+          unzip -l "$apk" | grep 'lib/arm64-v8a/libopencv_java4.so'
+          unzip -l "$apk" | grep 'assets/vio_config/estimator_config.yaml'
+          python3 tools/check_android_native_dependencies.py "$apk"
+          python3 tools/check_elf_16k.py "$apk" --strict
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$apk"
+      - name: Publish PRIVATE test release directly (no Actions artifact quota)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.3.9-geometry-calibration-qa-private-test.1
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Immutable test release tag already exists. Refusing silent replacement."
+            exit 1
+          fi
+          apk=RF-Lab-v1.3.9-Geometry-Calib-Quality-Pixel-PRIVATE-Test.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          digest="$(sha256sum "$apk" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$digest" "$apk" | sha256sum -c -
+          cat > release-notes.txt <<EOF
+          PRIVATE INTERNAL PIXEL 10 PRO XL TEST ONLY.
+          Native GPLv3 OpenVINS MSCKF Camera2+IMU tracking and real timestamped RGB pose session.
+          On-phone Depth Anything 3-Small LiteRT inference.
+          NEW v1.3.9 geometry and calibration QA:
+          Correct DA3 Small LiteRT raw affine-invariant RELATIVE DEPTH semantics,
+          no reciprocal inversion of this output in preview, heatmap or multi-view
+          triangulation fit. Fit Z_vio = scale * DA3_raw + shift.
+          Single-view RGB-D backprojection uses actual Camera2-derived pinhole
+          K and radial/tangential distortion when available, with EXACT
+          rotation and center crop inversion, no invented focal length when K exists.
+          Native 6DoF OpenVINS camera pose is interpolated to the RGB shutter
+          timestamp with bounded gaps and no extrapolated room geometry.
+          Add on-device 9x6-inner-corner checkerboard camera-only intrinsic
+          calibration audit with reprojection RMS and private JSON export.
+          Add high-rate Android IMU timing/static bias diagnostics and export.
+          Add user-measured 1m/known distance, closed-route and 90-degree
+          rotation VIO benchmark with JSON evidence in session ZIP.
+          Per-frame dominant-plane support diagnoses curved single-view clouds.
+          Geometrically aligned multi-view RGB points now require cross-frame
+          spatial agreement from DISTINCT photos, rather than blind append;
+          contradictory/double surfaces reject the saved map.
+          v1.3.8 photo navigator and explicitly nonmetric research world
+          visualization remain available; per-photo processing and CSV logs
+          include the new quality and calibration metrics.
+          IMPORTANT: Camera-IMU extrinsic/time offset NOT verified for Pixel,
+          no true multi-frame DA3 model deployment, no validated BA/loop closure,
+          no measured metric accuracy. Offline calibration target and independent
+          phone tests are STILL REQUIRED. This is a PRIVATE diagnostic build.
+          Tests/assemble/native 16 KiB/DT_NEEDED/zipalign passed in this job.
+          DO NOT distribute outside authorized private testers until combined GPLv3
+          corresponding source and third-party license obligations are reviewed.
+          Source commit: $GITHUB_SHA
+          APK SHA256: $digest
+          EOF
+          gh release create "$tag" "$apk" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "RF Lab v1.3.9 — DA3 geometry, Pixel camera calibration QA and VIO benchmarks (PRIVATE test)" \
+            --notes-file release-notes.txt
+          echo "Private APK created from verified commit $GITHUB_SHA"
