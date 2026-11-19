@@ -255,11 +255,11 @@ class PhotoGalleryActivity: Activity() {
         AlertDialog.Builder(this).setTitle("VIO-Referenzauswertung")
             .setMessage("VIO-Netto-Verschiebung: "+
                 String.format(java.util.Locale.GERMANY,"%.2f",r.netDisplacementUnvalidated)+
-                " unvalidierte Einheiten\\nPfad: "+
+                " unvalidierte Einheiten\nPfad: "+
                 String.format(java.util.Locale.GERMANY,"%.2f",r.pathLengthUnvalidated)+
-                " Einheiten\\nTranslations-/Loop-Fehler: "+pct+
-                "\\nRotation zwischen Endpunkten: "+angle+
-                "\\n\\nNur aussagekräftig, wenn Referenzbewegung "+
+                " Einheiten\nTranslations-/Loop-Fehler: "+pct+
+                "\nRotation zwischen Endpunkten: "+angle+
+                "\n\nNur aussagekräftig, wenn Referenzbewegung "+
                 "und VIO-Endpunkte übereinstimmen. "+
                 "JSON im Messdaten-ZIP enthalten.")
             .setPositiveButton("OK",null).show()
@@ -284,11 +284,11 @@ class PhotoGalleryActivity: Activity() {
                 File(snapshot,"checkerboard_intrinsics_audit.json")
                     .writeText(report.json().toString(2))
                 val message="Erkannte Muster: "+report.detected+"/"+
-                    report.tested+"\\nRMS: "+
+                    report.tested+"\nRMS: "+
                     (report.rmsReprojectionPx?.let{
                         String.format(java.util.Locale.GERMANY,"%.2f px",it)
                     }?:"nicht bestimmbar")+
-                    "\\nKamera-Parameter: "+
+                    "\nKamera-Parameter: "+
                     if(report.sufficientForCameraIntrinsics)
                         "Kandidat berechnet, noch unabhängig prüfen."
                     else "unzureichend; mehr variable Musterfotos nötig."
@@ -298,7 +298,7 @@ class PhotoGalleryActivity: Activity() {
                         AlertDialog.Builder(this)
                             .setTitle("Kamera-Kalibrierungsdiagnose")
                             .setMessage(message+
-                                "\\n\\nIMU-Rotation, Hebelarm und Sensorzeitoffset "+
+                                "\n\nIMU-Rotation, Hebelarm und Sensorzeitoffset "+
                                 "sind NICHT kalibriert. JSON im ZIP-Export.")
                             .setPositiveButton("OK",null).show()
                     }
