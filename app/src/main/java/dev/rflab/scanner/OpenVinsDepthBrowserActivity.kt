@@ -34,6 +34,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
         val depth:File,val pose:Int,val rotation:Int,
         val gate:String,val worldProjected:Boolean,
         val dominantPlaneFraction:Double,
+        val alignedPlaneFraction:Double,
         val medianRgbLuma:Int,val rgbUsableForGeometry:Boolean,
         val alignedRgbCloud:File?,val alignmentInliers:Int
     )
@@ -108,7 +109,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
             val relative=item.optString("relative_rgb_cloud_file")
             val depthName=item.optString("depth_preview_file")
             val inputName=item.optString("input_photo")
-            if(!relative.matches(Regex("relative_[0-9]{4}.rgbxyz")) ||
+            if(!relative.matches(Regex("relative_[0-9]{4}[.]rgbxyz")) ||
                 !depthName.matches(Regex("depth_[0-9]{4}\\.jpg")) ||
                 !inputName.matches(Regex("img_[0-9]{4}\\.jpg")))continue
             val file=File(folder,relative)
@@ -124,6 +125,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
                 item.optString("geometry_gate_reason","unbekannt"),
                 item.optBoolean("diagnostic_world_pose_projected",false),
                 item.optDouble("dominant_plane_support_fraction",Double.NaN),
+                item.optDouble("aligned_plane_support_fraction",Double.NaN),
                 item.optInt("rgb_median_luma_0_255",-1),
                 item.optBoolean("rgb_usable_for_multiview",false),
                 alignedFile,
@@ -312,9 +314,14 @@ class OpenVinsDepthBrowserActivity:Activity() {
                         else " · Nicht in Gesamtansicht. "
                     else "Ohne initialisierte VIO-Pose. ")+
                     (if(frame.dominantPlaneFraction.isFinite())
-                        "Ebenenanteil "+
+                        "Ebene DA3 "+
                             (frame.dominantPlaneFraction*100).toInt()+
-                            "% (nur Diagnose). " else "")+
+                            "%"+
+                            (if(frame.alignedPlaneFraction.isFinite())
+                                " / ORB "+
+                                    (frame.alignedPlaneFraction*100).toInt()+
+                                    "%" else "")+
+                            " (nur Diagnose). " else "")+
                     (if(aligned)
                         "ORB: "+frame.alignmentInliers+
                             " Inlier, VIO-Skala nicht validiert. "
