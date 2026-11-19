@@ -21,7 +21,7 @@ import kotlin.math.sqrt
  */
 internal object OpenVinsDa3MultiView {
     data class Feature(
-        val relativeInverse: Double,
+        val relativeDepth: Double,
         val normalizedX: Double,
         val normalizedY: Double,
         val ray: OpenVinsDa3Alignment.Ray,
@@ -171,8 +171,8 @@ internal object OpenVinsDa3MultiView {
                                 fa.ray,fb.ray) ?:return@forEach
                             triangulated++
                             if(diagnostic.size<20_000){
-                                val aDist=fa.ray.lengthAtAxialUnit/depth.inverseA
-                                val bDist=fb.ray.lengthAtAxialUnit/depth.inverseB
+                                val aDist=fa.ray.lengthAtAxialUnit*depth.axialA
+                                val bDist=fb.ray.lengthAtAxialUnit*depth.axialB
                                 val xyz=DoubleArray(3){axis->
                                     .5*(fa.ray.origin[axis]+aDist*fa.ray.unit[axis]+
                                         fb.ray.origin[axis]+bDist*fb.ray.unit[axis])
@@ -187,10 +187,10 @@ internal object OpenVinsDa3MultiView {
                             val aa=samples.getValue(a.photoIndex)
                             val bb=samples.getValue(b.photoIndex)
                             if(aa.size<3000) aa.add(OpenVinsDa3Alignment.Observation(
-                                fa.relativeInverse,depth.inverseA,
+                                fa.relativeDepth,depth.axialA,
                                 fa.normalizedX,fa.normalizedY))
                             if(bb.size<3000) bb.add(OpenVinsDa3Alignment.Observation(
-                                fb.relativeInverse,depth.inverseB,
+                                fb.relativeDepth,depth.axialB,
                                 fb.normalizedX,fb.normalizedY))
                         }
                     }finally{
