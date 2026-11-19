@@ -248,3 +248,50 @@ a local-only private APK with source commit/SHA256 in
 `private-build/`. It **does not publish** or upload anything.
 The GitHub v1.3.9 release remains **unverified** until a real runner
 build or equivalent local test completes.
+
+## 11. Added per-frame geometry A/B: relative DA3 versus ORB aligned
+
+v1.3.9 now preserves **two genuinely different 3D representations** for
+every photo that passes sparse multi-view triangulation:
+
+- `relative_0000.rgbxyz`: per-photo relative DA3-Small depth from the
+  actual Camera2-radtan optical rays, normalized **only for display**.
+  There is no common scale or known physical Z.
+- `aligned_0000.rgbxyz`: `Z_VIO = scale × D_DA3 + shift` using
+  the per-photo RANSAC fit to actual 3D ORB two-view triangulations,
+  projected using the interpolated camera pose into the common
+  **unvalidated** native VIO world coordinate system.
+
+For each successful fit the individual aligned point cloud is written to
+the private `offline_*` folder and linked in `manifest.json` with
+`aligned_rgb_cloud_file`, point count, RANSAC inliers, affine scale and
+shift. If a photo lacks usable ORB correspondences, **no aligned file is
+fabricated**. The composite `vio_world_diagnostic.rgbxyz` still
+distinguishes the matched real geometry from individually normalized
+visualization fallback.
+
+The in-app **Bilder + Weltkarte** browser now offers two buttons below
+the tabs:
+
+- **DA3 relativ**: the original relative single-image cloud.
+- **ORB-angepasst**: the actual multi-view-depth-aligned point cloud
+  for the selected image when there was a valid fit.
+
+These modes have different coordinate frames, so their apparent screen
+rotation/offset need not be identical. Compare the **shape/flatness**
+and the measured `Ebene DA3 X% / ORB Y%` planar support rather than
+screen positions. Per-photo aligned geometry has a **better justified
+shape/depth mapping** but is still NOT measured in metres.
+
+The checkerboard intrinsic calibration also now requires *view diversity*
+before it accepts its result as a usable candidate: at least 12
+detected patterns, 3 image regions, changing apparent board size
+and at least two oblique/perspective views. RMS alone is insufficient:
+repeated photos of the same target pose are a degenerate calibration.
+Tilt can be detected by corner-axis skew and opposing-edge
+perspective foreshortening.
+
+**Status:** All code is committed on `feature/embedded-openvins-v1.3`.
+As of this update GitHub Actions continues failing before a runner is
+assigned. The Android APK remains unbuilt, and the unit tests have **not**
+been run on the Android CI or on the Pixel.
