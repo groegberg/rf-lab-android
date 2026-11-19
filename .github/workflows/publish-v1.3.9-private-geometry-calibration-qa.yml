@@ -18,7 +18,9 @@ concurrency:
 
 jobs:
   verified-private-pixel-apk:
-    runs-on: ubuntu-22.04
+    # Same GitHub image as the previously successful verified v1.3.8 APK.
+    # Runner_id=0 pre-start failures must be resolved at account/platform level.
+    runs-on: ubuntu-24.04
     timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
@@ -110,6 +112,17 @@ jobs:
           Add user-measured 1m/known distance, closed-route and 90-degree
           rotation VIO benchmark with JSON evidence in session ZIP.
           Per-frame dominant-plane support diagnoses curved single-view clouds.
+          NEW: For each photo with a genuinely triangulated ORB depth fit,
+          persist a SEPARATE aligned_XXXX.rgbxyz RGB cloud in unvalidated VIO
+          world axes. The RGB-D browser offers DA3 relative vs ORB aligned
+          A/B buttons per photo, and displays plane support for BOTH modes.
+          No aligned file is fabricated for unmatched frames.
+          Intrinsic checkerboard calibration now requires 12 well distributed,
+          differently angled/scaled views; RMS alone cannot certify K.
+          New original JPEG brightness/texture check rejects black/featureless
+          photos from ORB geometry but retains their visual DA3 preview.
+          Native CaptureResult logs exposure, sensor frame duration, ISO,
+          rolling below-20Hz evidence; live VIO warns on frame-rate slowdown.
           Geometrically aligned multi-view RGB points now require cross-frame
           spatial agreement from DISTINCT photos, rather than blind append;
           contradictory/double surfaces reject the saved map.
@@ -125,6 +138,7 @@ jobs:
           corresponding source and third-party license obligations are reviewed.
           Source commit: $GITHUB_SHA
           APK SHA256: $digest
+          Technical guide: docs/OPENVINS_DA3_GEOMETRY_CALIBRATION_V139.md
           EOF
           gh release create "$tag" "$apk" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
