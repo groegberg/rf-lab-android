@@ -45,6 +45,13 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
     private var auditResultDistortion = "UNKNOWN"
     private var auditResultZoom = Double.NaN
     private var auditLastPhysical = "UNKNOWN"
+    // Actual exposure and frame duration matter more than requested FPS.
+    private var auditMinExposureMs = Double.POSITIVE_INFINITY
+    private var auditMaxExposureMs = Double.NaN
+    private var auditMaxIso = 0
+    private var auditMaxFrameDurationMs = Double.NaN
+    private var auditFramesBelow20Hz = 0
+    private var auditAeFpsRange = "UNKNOWN"
 
     private fun resetCameraAudit() {
         auditCaptures=0
@@ -61,6 +68,12 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
         auditResultDistortion="UNKNOWN"
         auditResultZoom=Double.NaN
         auditLastPhysical="UNKNOWN"
+        auditMinExposureMs=Double.POSITIVE_INFINITY
+        auditMaxExposureMs=Double.NaN
+        auditMaxIso=0
+        auditMaxFrameDurationMs=Double.NaN
+        auditFramesBelow20Hz=0
+        auditAeFpsRange="UNKNOWN"
     }
 
     private fun captureMode(value: Int?, off: Int) =
@@ -117,6 +130,17 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
                 appendLine("zoom_ratio="+auditResultZoom)
                 appendLine("max_focal_relative_drift="+auditMaxFocalDrift)
                 appendLine("max_focus_diopter_drift="+auditMaxFocusDrift)
+                appendLine("min_actual_exposure_ms="+
+                    if(auditMinExposureMs.isFinite())auditMinExposureMs else "UNKNOWN")
+                appendLine("max_actual_exposure_ms="+auditMaxExposureMs)
+                appendLine("max_actual_iso="+auditMaxIso)
+                appendLine("max_sensor_frame_duration_ms="+
+                    auditMaxFrameDurationMs)
+                appendLine("sensor_frames_below_20_hz="+auditFramesBelow20Hz)
+                appendLine("actual_ae_target_fps_range="+auditAeFpsRange)
+                appendLine("possible_low_light_frame_rate_slowdown="+
+                    (auditCaptures>=20 &&
+                     auditFramesBelow20Hz>auditCaptures/3))
                 appendLine("calibration_source=approximate_camera2_seed_not_kalibr")
                 appendLine("online_openvins_calibration_exported=false")
                 appendLine("metric_calibration_verified=false")
@@ -169,11 +193,34 @@ once("    private val mPreviewFormat = ImageFormat.YUV_420_888",
                 CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
             auditResultZoom=result.get(CaptureResult.CONTROL_ZOOM_RATIO)
                 ?.toDouble() ?:Double.NaN
+            result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let{ns->
+                if(ns>0L){
+                    val ms=ns/1e6
+                    auditMinExposureMs=minOf(auditMinExposureMs,ms)
+                    auditMaxExposureMs=if(auditMaxExposureMs.isFinite())
+                        maxOf(auditMaxExposureMs,ms) else ms
+                }
+            }
+            result.get(CaptureResult.SENSOR_SENSITIVITY)?.let{iso->
+                auditMaxIso=maxOf(auditMaxIso,iso)
+            }
+            result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let{ns->
+                if(ns>0L){
+                    val ms=ns/1e6
+                    auditMaxFrameDurationMs=if(auditMaxFrameDurationMs.isFinite())
+                        maxOf(auditMaxFrameDurationMs,ms) else ms
+                    if(ms>50.0)auditFramesBelow20Hz++
+                }
+            }
+            auditAeFpsRange=result.get(
+                CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)?.toString()
+                ?: "UNKNOWN"
             // Do not perform disk IO on EVERY camera callback once a
             // persistent warning appears: one-shot immediate alert, then
             // once per ~second. Avoid creating the very VIO lag we audit.
             val warning=auditPhysicalChanged ||
-                auditMaxFocalDrift>.01 || auditMaxFocusDrift>.05
+                auditMaxFocalDrift>.01 || auditMaxFocusDrift>.05 ||
+                (auditCaptures>=60 && auditFramesBelow20Hz>auditCaptures/3)
             if(auditCaptures<=2 || auditCaptures%30==0 ||
                 (warning && !auditWarningAlreadySaved))writeCameraAudit()
             if(warning)auditWarningAlreadySaved=true
