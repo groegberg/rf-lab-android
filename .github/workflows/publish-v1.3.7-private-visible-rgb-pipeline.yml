@@ -1,12 +1,8 @@
 name: Publish RF Lab v1.3.7 private OpenVINS DA3 visible RGB pipeline APK
 
+# v1.3.7 release is immutable and already published. Keep manual entry only,
+# avoiding a failed duplicate release on every new v1.3.8 source commit.
 on:
-  push:
-    branches: [feature/embedded-openvins-v1.3]
-    paths:
-      - .github/workflows/publish-v1.3.7-private-visible-rgb-pipeline.yml
-      - app/src/main/**
-      - app/src/test/**
   workflow_dispatch:
 
 permissions:
