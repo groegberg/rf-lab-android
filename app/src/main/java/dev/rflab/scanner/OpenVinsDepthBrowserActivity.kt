@@ -32,7 +32,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
     private data class Photo(
         val ordinal:Int,val imageName:String,val cloud:File,
         val depth:File,val pose:Int,val rotation:Int,
-        val gate:String,val worldProjected:Boolean
+        val gate:String,val worldProjected:Boolean,
+        val dominantPlaneFraction:Double
     )
 
     private val bg=Color.rgb(9,18,30)
@@ -112,7 +113,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
                 item.optInt("optical_pose_index",-1),
                 item.optInt("da3_actual_rotation_degrees",0),
                 item.optString("geometry_gate_reason","unbekannt"),
-                item.optBoolean("diagnostic_world_pose_projected",false)))
+                item.optBoolean("diagnostic_world_pose_projected",false),
+                item.optDouble("dominant_plane_support_fraction",Double.NaN)))
         }
         photos=images.sortedBy{it.ordinal}
         worldFile=File(folder,"vio_world_diagnostic.rgbxyz")
@@ -263,7 +265,12 @@ class OpenVinsDepthBrowserActivity:Activity() {
                     "VIO-Pose #"+frame.pose+
                         if(frame.worldProjected)" · Teil der Gesamtansicht. "
                         else " · Nicht in Gesamtansicht. "
-                    else "Ohne initialisierte VIO-Pose. ")+frame.gate
+                    else "Ohne initialisierte VIO-Pose. ")+
+                    (if(frame.dominantPlaneFraction.isFinite())
+                        "Ebenenanteil "+
+                            (frame.dominantPlaneFraction*100).toInt()+
+                            "% (nur Diagnose). " else "")+
+                    frame.gate
                 else "Offline-Rekonstruktion erneut starten."
             rgbImage.visibility=View.VISIBLE
             depthImage.visibility=View.VISIBLE
