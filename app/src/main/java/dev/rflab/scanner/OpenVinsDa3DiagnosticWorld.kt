@@ -71,16 +71,15 @@ internal object OpenVinsDa3DiagnosticWorld {
         val high=frame.rawHigh.toDouble()
         if(!low.isFinite() || !high.isFinite() || low<=0.0 ||
             high<=low*1.025)return emptyList()
-        // Same inverse-depth percentile direction as the DA3 2.5D preview.
-        val near=1.0/high
-        val far=1.0/low
-        val spread=far-near
+        // Exact model export predicts relative DEPTH, not disparity:
+        // smaller raw values mean nearer surfaces in this artifact.
+        val spread=high-low
         if(spread<=1e-6 || !spread.isFinite())return emptyList()
         val out=ArrayList<SurveyDepth>(frame.rays.size)
         for(p in frame.rays) {
-            val raw=p.relativeInverse.toDouble()
+            val raw=p.relativeDepth.toDouble()
             if(raw<=0 || !raw.isFinite())continue
-            val ratio=((1.0/raw-near)/spread)
+            val ratio=(raw-low)/spread
             if(!ratio.isFinite() || ratio<0.0 || ratio>1.0)continue
             val displayZ=.7+3.0*ratio
             val x=p.center[0]+(p.worldAtAxialUnit[0]-p.center[0])*displayZ
