@@ -96,6 +96,57 @@ internal object ExternalVioTrajectory {
         return result
     }
 
+    /**
+     * Pose at the *camera exposure timestamp*, with interpolation between
+     * surrounding initialized native VIO states. Nearest-sample assignment
+     * at 15 Hz introduces 20-35 ms rotation/translation misregistration.
+     *
+     * Reject time gaps rather than inventing extrapolated camera poses.
+     * Quaternion interpolation uses the shortest arc (JPL component order
+     * remains unchanged). Online K/extrinsics use the nearer state.
+     */
+    fun interpolate(samples:List<Sample>,cameraTimestampNs:Long,
+                    maxBracketNs:Long=180_000_000L,
+                    endpointToleranceNs:Long=20_000_000L):Sample? {
+        if(samples.isEmpty() || cameraTimestampNs<=0L ||
+            maxBracketNs<=0 || endpointToleranceNs<0)return null
+        var lo=0
+        var hi=samples.lastIndex
+        while(lo<hi){
+            val mid=(lo+hi)/2
+            if(samples[mid].timestampNs<cameraTimestampNs)lo=mid+1
+            else hi=mid
+        }
+        val b=samples[lo]
+        if(b.timestampNs==cameraTimestampNs)return b
+        if(lo==0 || b.timestampNs<cameraTimestampNs){
+            val edge=if(lo==0)b else samples.last()
+            return edge.takeIf{
+                kotlin.math.abs(it.timestampNs-cameraTimestampNs)<=
+                    endpointToleranceNs
+            }
+        }
+        val a=samples[lo-1]
+        val span=b.timestampNs-a.timestampNs
+        if(span<=0 || span>maxBracketNs)return null
+        val u=(cameraTimestampNs-a.timestampNs).toDouble()/span
+        if(u !in 0.0..1.0)return null
+        // Normalized linear interpolation is accurate for small camera frame
+        // intervals; inverse-sign handling avoids discontinuities at q~-q.
+        val qa=doubleArrayOf(a.qw,a.qx,a.qy,a.qz)
+        val qb=doubleArrayOf(b.qw,b.qx,b.qy,b.qz)
+        val dot=qa.indices.sumOf{qa[it]*qb[it]}
+        val sign=if(dot<0.0)-1.0 else 1.0
+        val q=DoubleArray(4){(1-u)*qa[it]+u*qb[it]*sign}
+        val norm=kotlin.math.sqrt(q.sumOf{it*it})
+        if(!norm.isFinite() || norm<.85)return null
+        val closest=if(u<=.5)a else b
+        return Sample(cameraTimestampNs,
+            a.x+(b.x-a.x)*u,a.y+(b.y-a.y)*u,a.z+(b.z-a.z)*u,
+            q[0]/norm,q[1]/norm,q[2]/norm,q[3]/norm,
+            closest.onlineCamera)
+    }
+
     fun read(session: File): List<Sample> {
         val csv=File(session,"external_vio_trajectory.csv")
         if(!csv.isFile || csv.length()>24L*1024L*1024L)return emptyList()
