@@ -10,6 +10,10 @@ import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
 import android.widget.GridLayout
+import android.widget.EditText
+import android.text.InputType
+import org.json.JSONObject
+import org.json.JSONArray
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
@@ -110,6 +114,9 @@ class PhotoGalleryActivity: Activity() {
         root.addView(button("Schachbrett-Kamerakalibrierung prüfen"){
             evaluateCameraCheckerboard()
         },LinearLayout.LayoutParams(-1,dp(44)))
+        root.addView(button("OpenVINS Referenztest · 1 m / Loop / 90°"){
+            showReferenceDialog()
+        },LinearLayout.LayoutParams(-1,dp(44)))
         val scroll=ScrollView(this).apply{isFillViewport=true}
         grid=GridLayout(this).apply{
             columnCount=3
@@ -174,6 +181,90 @@ class PhotoGalleryActivity: Activity() {
             grid.addView(tile,spec)
         }
     }
+    private fun showReferenceDialog(){
+        val recorded=ExternalVioTrajectory.read(session)
+        if(recorded.size<15){
+            AlertDialog.Builder(this).setTitle("VIO-Referenztest")
+                .setMessage("Zuerst eine OpenVINS-Aufnahme mit "+
+                    "initialisierter Trajektorie aufzeichnen oder importieren.")
+                .setPositiveButton("OK",null).show()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Physischer Referenztest")
+            .setItems(arrayOf("Bekannte geradlinige Strecke (Meter)",
+                "Geschlossene Runde (Start = Ende)",
+                "Exakte 90°-Handydrehung")){_,option->
+                val kind=when(option){
+                    0->OpenVinsReferenceBenchmark.Kind.KNOWN_TRANSLATION
+                    1->OpenVinsReferenceBenchmark.Kind.CLOSED_ROUTE
+                    else->OpenVinsReferenceBenchmark.Kind.KNOWN_ROTATION
+                }
+                if(option==0){
+                    val input=EditText(this).apply{
+                        inputType=InputType.TYPE_CLASS_NUMBER or
+                            InputType.TYPE_NUMBER_FLAG_DECIMAL
+                        setSingleLine(true)
+                        setText("1.0")
+                        selectAll()
+                    }
+                    AlertDialog.Builder(this)
+                        .setTitle("Bekannte physische Strecke in m")
+                        .setMessage("Start/Ende der INITIALISIERTEN "+
+                            "VIO-Pose müssen den real gemessenen Endpunkten "+
+                            "entsprechen. Dies ist kein Kalibrierzertifikat.")
+                        .setView(input)
+                        .setPositiveButton("Auswerten"){_,_->
+                            val metres=input.text.toString()
+                                .replace(',','.').toDoubleOrNull()
+                            if(metres!=null && metres in .1..25.0)
+                                showReferenceResult(kind,metres)
+                            else Toast.makeText(this,
+                                "Strecke 0,1–25 m eingeben",
+                                Toast.LENGTH_LONG).show()
+                        }.setNegativeButton("Abbrechen",null).show()
+                }else showReferenceResult(kind,1.0)
+            }.setNegativeButton("Abbrechen",null).show()
+    }
+
+    private fun showReferenceResult(
+        kind:OpenVinsReferenceBenchmark.Kind,
+        knownMetres:Double){
+        val recorded=ExternalVioTrajectory.read(session)
+        val r=OpenVinsReferenceBenchmark.evaluate(recorded,kind,knownMetres)
+        val json=JSONObject()
+            .put("source","native OpenVINS with user-defined physical reference")
+            .put("kind",kind.name)
+            .put("reference_distance_m",r.referenceMetres?:JSONObject.NULL)
+            .put("pose_count",r.poseCount)
+            .put("unvalidated_path_units",r.pathLengthUnvalidated)
+            .put("unvalidated_net_displacement",r.netDisplacementUnvalidated)
+            .put("relative_translation_error",
+                r.relativeTranslationError?:JSONObject.NULL)
+            .put("pose_rotation_angle_degrees",r.rotationAngleDegrees)
+            .put("rotation_reference_error_degrees",
+                r.rotationErrorDegrees?:JSONObject.NULL)
+            .put("metric_calibration_certified",false)
+            .put("warnings",JSONArray(r.warnings))
+        File(session,"vio_reference_"+kind.name.lowercase()+".json")
+            .writeText(json.toString(2))
+        val pct=r.relativeTranslationError?.let{
+            String.format(java.util.Locale.GERMANY,"%.1f%%",it*100)
+        }?:"–"
+        val angle=String.format(java.util.Locale.GERMANY,"%.1f°",
+            r.rotationAngleDegrees)
+        AlertDialog.Builder(this).setTitle("VIO-Referenzauswertung")
+            .setMessage("VIO-Netto-Verschiebung: "+
+                String.format(java.util.Locale.GERMANY,"%.2f",r.netDisplacementUnvalidated)+
+                " unvalidierte Einheiten\\nPfad: "+
+                String.format(java.util.Locale.GERMANY,"%.2f",r.pathLengthUnvalidated)+
+                " Einheiten\\nTranslations-/Loop-Fehler: "+pct+
+                "\\nRotation zwischen Endpunkten: "+angle+
+                "\\n\\nNur aussagekräftig, wenn Referenzbewegung "+
+                "und VIO-Endpunkte übereinstimmen. "+
+                "JSON im Messdaten-ZIP enthalten.")
+            .setPositiveButton("OK",null).show()
+    }
+
     private fun evaluateCameraCheckerboard(){
         val snapshot=session
         val files=store.frames(snapshot).map{it.jpeg}
