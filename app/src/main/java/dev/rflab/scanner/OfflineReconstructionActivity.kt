@@ -36,6 +36,8 @@ class OfflineReconstructionActivity:Activity() {
     private lateinit var trajectory:RelativeTrajectoryView
     private lateinit var cloud:ScanCloudView
     private lateinit var mapToggle:Button
+    private lateinit var browserButton:Button
+    private var latestFolder:File?=null
     private lateinit var depth:ImageView
     private var running=false
 
@@ -116,9 +118,23 @@ class OfflineReconstructionActivity:Activity() {
             cloud.visibility=if(show)View.VISIBLE else View.GONE
             trajectory.visibility=if(show)View.GONE else View.VISIBLE
         }.apply{isEnabled=false}
-        root.addView(mapToggle,LinearLayout.LayoutParams(-1,dp(44)).apply{
-            bottomMargin=dp(5)
-        })
+        val viewControls=LinearLayout(this).apply{
+            orientation=LinearLayout.HORIZONTAL
+        }
+        mapToggle.text="3D / 2D"
+        viewControls.addView(mapToggle,
+            LinearLayout.LayoutParams(0,dp(44),.8f))
+        browserButton=button("Bilder + Weltkarte"){
+            openBrowser()
+        }.apply{isEnabled=false}
+        viewControls.addView(browserButton,
+            LinearLayout.LayoutParams(0,dp(44),1.2f).apply{
+                leftMargin=dp(6)
+            })
+        root.addView(viewControls,
+            LinearLayout.LayoutParams(-1,dp(44)).apply{
+                bottomMargin=dp(5)
+            })
         calculate=button("Offline berechnen",true){start()}
         root.addView(calculate,LinearLayout.LayoutParams(-1,dp(55)))
         root.addView(button("Aufnahmeserie / Export öffnen"){
@@ -126,6 +142,14 @@ class OfflineReconstructionActivity:Activity() {
                 putExtra("photo_session",session.name)
             })
         },LinearLayout.LayoutParams(-1,dp(48)).apply{topMargin=dp(6)})
+        latestFolder=session.listFiles()?.filter{
+            it.isDirectory && it.name.startsWith("offline_") &&
+                File(it,"manifest.json").isFile
+        }?.maxByOrNull{it.name}
+        browserButton.isEnabled=latestFolder?.let{folder->
+            File(folder,"manifest.json").readText()
+                .contains("relative_rgb_cloud_file")
+        }?:false
         val importedVio=ExternalVioTrajectory.read(session)
         if(importedVio.isNotEmpty()){
             trajectory.externalPoses=importedVio
@@ -134,6 +158,15 @@ class OfflineReconstructionActivity:Activity() {
                 store.frames(session).size+" RGB-Fotos\n"+
                 "3D-Kamerapfad sichtbar. Farbige Tiefe nur nach Qualitätsprüfung."
         }
+    }
+
+    private fun openBrowser(){
+        val selected=latestFolder ?:return
+        if(!File(selected,"manifest.json").isFile)return
+        startActivity(Intent(this,OpenVinsDepthBrowserActivity::class.java).apply{
+            putExtra("photo_session",session.name)
+            putExtra("offline_folder",selected.name)
+        })
     }
 
     private fun show3dNativeTrajectory(
@@ -164,9 +197,7 @@ class OfflineReconstructionActivity:Activity() {
         cloud.store=preview
         cloud.visibility=View.VISIBLE
         trajectory.visibility=View.GONE
-        mapToggle.text=if(sparse.isNotEmpty())
-            "3D-ORB-Diagnosepunkte / 2D-Pfad"
-            else "3D-Kamerapfad / 2D-Pfad"
+        mapToggle.text="3D / 2D"
         mapToggle.isEnabled=true
     }
 
@@ -183,7 +214,7 @@ class OfflineReconstructionActivity:Activity() {
         cloud.visibility=View.VISIBLE
         trajectory.visibility=View.GONE
         mapToggle.isEnabled=true
-        mapToggle.text="3D-RGB-Tiefenvorschau / 2D-Kamerapfad"
+        mapToggle.text="3D / 2D"
     }
 
     /** Real triangulated multiview, but unvalidated Pixel IMU extrinsic.
@@ -210,7 +241,7 @@ class OfflineReconstructionActivity:Activity() {
         cloud.topDown=false
         cloud.visibility=View.VISIBLE
         trajectory.visibility=View.GONE
-        mapToggle.text="3D-Mehrbild-Diagnose / 2D-Kamerapfad"
+        mapToggle.text="3D / 2D"
         mapToggle.isEnabled=true
     }
 
@@ -253,7 +284,7 @@ class OfflineReconstructionActivity:Activity() {
                         cloud.visibility=View.VISIBLE
                         trajectory.visibility=View.GONE
                         mapToggle.isEnabled=true
-                        mapToggle.text="3D-Farbpunkte / 2D-Kamerapfad"
+                        mapToggle.text="3D / 2D"
                     }else if(result.multiViewResearchPreview.size>=50){
                         showResearchMultiViewPreview(result.externalVio,
                             result.multiViewResearchPreview)
@@ -266,14 +297,21 @@ class OfflineReconstructionActivity:Activity() {
                             result.externalVio,result.sparsePreview)
                     }
                     result.lastDepth?.let{depth.setImageBitmap(it)}
+                    latestFolder=result.folder
+                    browserButton.isEnabled=result.da3Images>0
                     title.text="OFFLINE · ERGEBNIS"
                     details.text=if(result.externalVio.isNotEmpty()){
                         val diag=VioSessionDiagnostics.inspect(result.externalVio,
                             store.frames(session).map{
                                 it.json.optLong("timestamp_ns") })
-                        result.da3Images.toString()+" DA3-Bilder · "+
-                            diag.matchedPhotos+"/"+diag.photoCount+
-                            " Fotos mit VIO-Pose\n"+
+                        result.da3Images.toString()+" DA3-Bilder einzeln · "+
+                            result.worldDiagnosticFrames+
+                            " in Gesamtkarte ("+diag.matchedPhotos+
+                            " Fotos mit VIO-Pose)\n"+
+                            result.worldAlignedFrames+
+                            " geometrisch angepasst · "+
+                            result.worldApproximateFrames+
+                            " Tiefen approximativ\n"+
                             if(result.fusedPoints>=50)
                                 result.fusedPoints.toString()+" RGB-Farbpunkte aus "+
                                     result.fusedFrames+" Keyframes\n"+
@@ -310,6 +348,10 @@ class OfflineReconstructionActivity:Activity() {
                     }
                     calculate.text="Erneut auswerten"
                     calculate.isEnabled=true
+                    // Open the completed world/individual browser directly.
+                    // From there the user can scrub ALL frames without
+                    // rerunning the DA3 model and inspect the composite map.
+                    if(result.da3Images>0)openBrowser()
                     running=false
                     window.clearFlags(
                         android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
