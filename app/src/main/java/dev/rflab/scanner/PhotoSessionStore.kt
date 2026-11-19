@@ -112,6 +112,10 @@ internal class PhotoSessionStore(context: Context) {
             File(session,"camera.json").takeIf { it.isFile }?.let{entry(it)}
             File(session,"checkerboard_intrinsics_audit.json")
                 .takeIf{it.isFile}?.let{entry(it)}
+            session.listFiles()?.filter{
+                it.isFile && it.name.startsWith("vio_reference_") &&
+                    it.name.endsWith(".json")
+            }?.sortedBy{it.name}?.forEach{entry(it)}
             // Real external OpenVINS MSCKF trajectory and provenance.
             File(session,"external_vio_trajectory.csv").takeIf {
                 it.isFile
