@@ -80,4 +80,33 @@ class ExternalVioTrajectoryTest {
     }
 
 
+    @Test fun timestampInterpolationFusesRotationAndPositionWithoutExtrapolation(){
+        val t=3_000_000_000L
+        val a=ExternalVioTrajectory.Sample(t,0.0,0.0,0.0,1.0,0.0,0.0,0.0)
+        val q=kotlin.math.sqrt(.5)
+        val b=ExternalVioTrajectory.Sample(t+100_000_000L,
+            1.0,0.0,0.0,q,0.0,0.0,q)
+        val mid=ExternalVioTrajectory.interpolate(
+            listOf(a,b),t+50_000_000L)!!
+        assertEquals(.5,mid.x,1e-9)
+        assertEquals(t+50_000_000L,mid.timestampNs)
+        assertEquals(1.0,kotlin.math.sqrt(
+            mid.qw*mid.qw+mid.qz*mid.qz),1e-9)
+        assertEquals(0.0,mid.qx,1e-9)
+        assertNull(ExternalVioTrajectory.interpolate(listOf(a,b),
+            t+300_000_000L))
+    }
+
+    @Test fun refusesLargeVioGapsAndHonorsEquivalentQuaternionSigns(){
+        val t=3_000_000_000L
+        val a=ExternalVioTrajectory.Sample(t,0.0,0.0,0.0,1.0,0.0,0.0,0.0)
+        val b=a.copy(timestampNs=t+400_000_000L,x=2.0,qw=-1.0)
+        assertNull(ExternalVioTrajectory.interpolate(listOf(a,b),
+            t+200_000_000L))
+        val close=b.copy(timestampNs=t+40_000_000L)
+        val mid=ExternalVioTrajectory.interpolate(listOf(a,close),
+            t+20_000_000L)!!
+        assertEquals(1.0,kotlin.math.abs(mid.qw),1e-9)
+    }
+
 }
