@@ -601,6 +601,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 "OpenVINS-Trajektorie zuordnungsfähig"
         val mapSamples=ArrayList<SurveyDepth>()
         val alignedFrameClouds=ArrayList<OpenVinsMultiViewAgreement.Input>()
+        var alignedRgbCaches=0
         var multiViewResearchPreview=emptyList<SurveyDepth>()
         val quality=JSONArray()
         for((index,rays) in candidateRays.toSortedMap()){
@@ -610,6 +611,27 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 alignedFrameClouds.add(
                     OpenVinsMultiViewAgreement.Input(index,fused))
                 alignedFrames++
+                // Keep the *real* ORB triangulation-calibrated world points
+                // for per-frame before/after inspection, even if the strict
+                // room-map gate later rejects the run. No fake depths.
+                val alignedName="aligned_%04d.rgbxyz".format(index)
+                try {
+                    OpenVinsRgbCloudCache.write(folder,alignedName,fused)
+                    alignedRgbCaches++
+                    for(manifestIdx in 0 until manifest.length()){
+                        val entry=manifest.optJSONObject(manifestIdx)?:continue
+                        if(entry.optInt("source_photo_index",-1)==index){
+                            entry.put("aligned_rgb_cloud_file",alignedName)
+                                .put("aligned_rgb_cloud_points",fused.size)
+                                .put("aligned_rgb_cloud_is_metric_verified",false)
+                            break
+                        }
+                    }
+                }catch(t:Throwable){
+                    warnings+="ORB RGB-Einzelbildwolke "+(index+1)+
+                        " nicht zwischenspeicherbar: "+
+                        (t.message?:t.javaClass.simpleName)
+                }
             }
             quality.put(JSONObject().put("photo_index",index)
                 .put("matched_triangular_correspondences",fit.observations)
@@ -696,6 +718,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
             JSONObject().put("source","Native OpenVINS + DA3 Small")
                 .put("per_frame_geometry_gate_counts",stageRejections)
                 .put("orb_registered_keyframes",candidateRays.size)
+                .put("individual_orb_aligned_rgb_clouds",alignedRgbCaches)
+                .put("individual_orb_aligned_clouds_metric_verified",false)
                 .put("multiview_overlap_support_fraction",
                     overlapAgreement.fraction)
                 .put("multiview_overlap_tested_points",
