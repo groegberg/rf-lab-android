@@ -339,11 +339,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // a heavyweight on-device neural network.
                 val cloudName="relative_%04d.rgbxyz".format(i)
                 var relativeCount=0
+                var planeAudit:OpenVinsPlanarityAudit.Report?=null
                 if(good.size>=100)try{
                     val points=OpenVinsDa3RelativePreview.make(
                         inference,frameCalibration ?:initialCalibration,
                         sourceWidth,sourceHeight)
                     if(points.size>=50){
+                        planeAudit=OpenVinsPlanarityAudit.inspect(points)
                         OpenVinsRgbCloudCache.write(folder,cloudName,points)
                         relativeCount=points.size
                         if(relativePreview.isEmpty()){
@@ -439,6 +441,12 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("relative_rgb_cloud_file",
                         if(relativeCount>0)cloudName else JSONObject.NULL)
                     .put("relative_rgb_cloud_points",relativeCount)
+                    .put("dominant_plane_support_fraction",
+                        planeAudit?.dominantPlaneFraction?:JSONObject.NULL)
+                    .put("dominant_plane_median_relative_residual",
+                        planeAudit?.medianResidualToSpan?.takeIf{it.isFinite()}
+                            ?:JSONObject.NULL)
+                    .put("dominant_plane_is_reference_ground_truth",false)
                     .put("diagnostic_world_pose_projected",
                         diagnosticWorldFrames.any{it.photoIndex==i})
                     .put("timestamp_ns",photo.json.optLong("timestamp_ns"))
@@ -538,14 +546,15 @@ internal class OfflineReconstruction(private val context:android.content.Context
             warnings+="Keine RGB-Bilder zeitlich/geometrisch zur "+
                 "OpenVINS-Trajektorie zuordnungsfähig"
         val mapSamples=ArrayList<SurveyDepth>()
+        val alignedFrameClouds=ArrayList<OpenVinsMultiViewAgreement.Input>()
         var multiViewResearchPreview=emptyList<SurveyDepth>()
         val quality=JSONArray()
         for((index,rays) in candidateRays.toSortedMap()){
             val fit=fits[index] ?: continue
             val fused=OpenVinsDa3Fusion.align(rays,fit)
-            if(fused.size>=50 && mapSamples.size+fused.size<180_000){
-                mapSamples.addAll(fused)
-                fusedFrames++
+            if(fused.size>=50){
+                alignedFrameClouds.add(
+                    OpenVinsMultiViewAgreement.Input(index,fused))
                 alignedFrames++
             }
             quality.put(JSONObject().put("photo_index",index)
@@ -565,9 +574,20 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         .put("median_relative_error",fit.medianRelativeError))
             }
         }
-        // At least two independently aligned views are required; otherwise
-        // there is no observable shared geometry, only a DA3 depth preview.
-        if(mapSamples.size>=150 && alignedFrames>=2 && external.isNotEmpty()){
+        // A world point must be supported by at least TWO DISTINCT photos.
+        // Mere concatenation of individually aligned maps is not fusion.
+        val overlapAgreement=OpenVinsMultiViewAgreement.verify(
+            alignedFrameClouds)
+        if(overlapAgreement.accepted){
+            mapSamples.addAll(overlapAgreement.points)
+            fusedFrames=overlapAgreement.supportedFrames
+        }else if(alignedFrameClouds.isNotEmpty()){
+            warnings+="Mehrbild-Punktwolke wegen fehlender räumlicher "+
+                "Überdeckung gesperrt: "+overlapAgreement.supported+
+                "/"+overlapAgreement.tested+" geometrisch konsistente RGB-Punkte"
+        }
+        if(mapSamples.size>=150 && overlapAgreement.accepted &&
+            alignedFrames>=2 && external.isNotEmpty()){
             if(cameraCalibration==null){
                 // Only a transient diagnostic cloud from real multi-view
                 // DA3 correspondences, never a stored calibrated room scan.
@@ -622,6 +642,14 @@ internal class OfflineReconstruction(private val context:android.content.Context
             JSONObject().put("source","Native OpenVINS + DA3 Small")
                 .put("per_frame_geometry_gate_counts",stageRejections)
                 .put("orb_registered_keyframes",candidateRays.size)
+                .put("multiview_overlap_support_fraction",
+                    overlapAgreement.fraction)
+                .put("multiview_overlap_tested_points",
+                    overlapAgreement.tested)
+                .put("multiview_overlap_supported_points",
+                    overlapAgreement.supported)
+                .put("multiview_overlap_accepted",
+                    overlapAgreement.accepted)
                 .put("sparse_orb_preview_points",sparsePreview.size)
                 .put("relative_single_image_preview_points",
                     relativePreview.size)
@@ -681,6 +709,12 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("fused_keyframes",fusedFrames)
             .put("multiview_depth_aligned_keyframes",alignedFrames)
             .put("multiview_triangulations",triangulatedFeatures)
+            .put("multiview_overlap_support_fraction",
+                overlapAgreement.fraction)
+            .put("multiview_overlap_supported_points",
+                overlapAgreement.supported)
+            .put("multiview_overlap_accepted",
+                overlapAgreement.accepted)
             .put("sparse_orb_preview_points",sparsePreview.size)
             .put("per_frame_geometry_gate_counts",stageRejections)
             .put("relative_single_image_preview_points",relativePreview.size)
