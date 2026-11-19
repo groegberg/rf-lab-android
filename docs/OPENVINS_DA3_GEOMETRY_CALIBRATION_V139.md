@@ -175,3 +175,76 @@ muss die dominante Ebene nicht die Wand sein; das ist
   Loop Closure, nachgeschaltete Voxel-/Surfel-Fusion und physisch
   vermessene Raumflächen. Der neue Cross-Frame-Gate ist dafür nur
   eine erste, überprüfbare Qualitätsstufe.
+
+
+## 9. Original Pixel recordings: independent lighting and VIO evidence
+
+From the **two original, privately supplied user ZIPs** captured on
+2026-11-18, an independent, offline JPEG and native-trajectory pass found:
+
+| Parameter | 07:24 | 22:03 |
+| --- | ---: | ---: |
+| Native initialized VIO poses | 462 | 303 |
+| Typical VIO output period | 33.3 ms (~30 Hz) | 66.7 ms (~15 Hz) |
+| RGB JPEG with native pose ±180 ms | 18 / 32 | 21 / 40 |
+| Median grayscale of VIO-associated RGB (0–255) | 127.5 | **6.0** |
+| Median OpenCV ORB features, max 1000 | 1000 | **148** |
+| Net native VIO displacement, unvalidated units | 0.024 | **75.631** |
+| P90 VIO speed, unvalidated units/s | 0.097 | **8.77** |
+
+The 22:03 recording is almost completely dark over the tracking interval
+and contains very few usable features, independently of unresolved
+Camera2/gyro calibration. The 15 Hz output does NOT on its own prove that
+AE exposure reduced the sensor FPS: native worker, CPU load or dropped
+frames can also contribute. That causal distinction requires **real
+CaptureResult** exposure duration and frame-duration evidence.
+
+### Additional fixes after initial v1.3.9 branch implementation
+
+- `OpenVinsRgbCaptureQuality` decodes a low-resolution representation
+  of the **actual original Camera2 RGB JPEG** before AI normalization.
+  It records grayscale median, near-black fraction and gradient
+  contrast for every photo in the offline manifest. Underexposed/
+  structureless photos remain available in the individual DA3 browser
+  but cannot contribute unreliable ORB multiview alignment. The browser
+  shows the real RGB brightness and its eligibility.
+- The pinned native `CaptureResult` diagnostic now reports actual
+  exposure times, ISO values, sensor frame duration and a rolling
+  90-frame count of frames with duration >50 ms. This avoids assuming
+  that a requested camera FPS was achieved. The live OpenVINS diagnostic
+  shows a **possible** low-light slowdown warning when recent frames
+  repeatedly fall below 20 Hz.
+- The offline map summary counts RGB photos rejected from multiview
+  by low light or insufficient structure.
+
+**Practical requirement:** Run future camera/VIO tests with sufficiently
+bright, evenly illuminated walls and furniture, without switching lenses
+or letting focus/OIS change. The second nighttime recording is NOT a
+fair standalone test of OpenVINS's calibrated-room potential.
+
+## 10. Build without GitHub-hosted Actions
+
+GitHub runs in private repository `groegberg/rf-lab-android`
+were blocked pre-start on 2026-11-19. Both 24.04 and 22.04 runner labels
+returned `runner_id=0`, empty steps and no logs. This frequently
+indicates GitHub Actions billing/budget entitlement or a platform
+provisioning issue; exact account-specific reason requires the owner's
+job annotation and billing settings.
+
+Tracked separately: [Actions runner blocker #11](https://github.com/groegberg/rf-lab-android/issues/11).
+
+**Local fallback (Linux or WSL2 with Android SDK, JDK17, Gradle 8.13):**
+
+```bash
+git checkout feature/embedded-openvins-v1.3
+export ANDROID_HOME="$HOME/Android/Sdk"
+bash tools/build_private_android_local.sh
+```
+
+The script runs pinned native OpenVINS bootstrap, rebuilds Android 16 KiB
+Boost, runs Kotlin tests and Alexa message contract, assembles the APK,
+validates native ELF dependencies, 16 KiB ELF and APK alignment and writes
+a local-only private APK with source commit/SHA256 in
+`private-build/`. It **does not publish** or upload anything.
+The GitHub v1.3.9 release remains **unverified** until a real runner
+build or equivalent local test completes.
