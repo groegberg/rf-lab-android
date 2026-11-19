@@ -82,8 +82,8 @@ class OfflineReconstructionActivity:Activity() {
         toolbar.addView(title,LinearLayout.LayoutParams(0,dp(48),1f))
         root.addView(toolbar)
         val description=TextView(this).apply{
-            text=if(ExternalVioTrajectory.read(session).isNotEmpty())
-                "OpenVINS: native VIO-Kameraposen + RGB-Zeitstempel\n"+
+            text=if(File(session, "external_vio_trajectory.csv").isFile)
+                "OpenVINS-Aufnahme mit RGB-Zeitstempeln\n"+
                 "Depth Anything 3: farbige, RELATIVE 3D-Punkte (nicht vermessen)"
             else "OpenCV: echte Bildkorrespondenzen und relative Posen\n"+
                 "Depth Anything 3: dichte KI-Tiefe, noch ohne metrischen Maßstab"
@@ -152,11 +152,14 @@ class OfflineReconstructionActivity:Activity() {
         }?:false
         val importedVio=ExternalVioTrajectory.read(session)
         if(importedVio.isNotEmpty()){
-            trajectory.externalPoses=importedVio
-            show3dNativeTrajectory(importedVio)
-            details.text=importedVio.size.toString()+" echte OpenVINS-Posen · "+
-                store.frames(session).size+" RGB-Fotos\n"+
-                "3D-Kamerapfad sichtbar. Farbige Tiefe nur nach Qualitätsprüfung."
+            val quality = VioMotionQuality.inspect(importedVio)
+            if (quality.acceptableForExperimentalGeometry) {
+                trajectory.externalPoses = importedVio
+                show3dNativeTrajectory(importedVio)
+                details.text = "${importedVio.size} OpenVINS-Posen · ${store.frames(session).size} RGB-Fotos"
+            } else {
+                details.text = "VIO-Pfad verworfen. ${store.frames(session).size} RGB-Fotos für DA3 verfügbar."
+            }
         }
     }
 
@@ -277,7 +280,8 @@ class OfflineReconstructionActivity:Activity() {
                         return@runOnUiThread
                     }
                     trajectory.poses=result.trajectory?.poses?:emptyList()
-                    trajectory.externalPoses=result.externalVio
+                    val usableVio = result.motionQuality?.acceptableForExperimentalGeometry == true
+                    trajectory.externalPoses = if (usableVio) result.externalVio else emptyList()
                     if(result.fusedPoints>=50){
                         cloud.store=RoomScanStore(this,
                             "rflab_openvins_scan_v1.json")
@@ -292,7 +296,7 @@ class OfflineReconstructionActivity:Activity() {
                         // The requested colored 3D visualization must not
                         // disappear when the VIO geometry safety gate fires.
                         showRelativeDepthPreview(result.relativePreview)
-                    }else if(result.externalVio.isNotEmpty()){
+                    }else if(usableVio){
                         show3dNativeTrajectory(
                             result.externalVio,result.sparsePreview)
                     }
@@ -300,7 +304,10 @@ class OfflineReconstructionActivity:Activity() {
                     latestFolder=result.folder
                     browserButton.isEnabled=result.da3Images>0
                     title.text="OFFLINE · ERGEBNIS"
-                    details.text=if(result.externalVio.isNotEmpty()){
+                    details.text=if(File(session, "external_vio_trajectory.csv").isFile && !usableVio){
+                        val reason = result.motionQuality?.reasons?.firstOrNull() ?: "Keine nutzbare VIO-Pose"
+                        "${result.da3Images} DA3-Einzelbilder · Gesamtkarte gesperrt\n$reason"
+                    }else if(result.externalVio.isNotEmpty()){
                         val diag=VioSessionDiagnostics.inspect(result.externalVio,
                             store.frames(session).map{
                                 it.json.optLong("timestamp_ns") })

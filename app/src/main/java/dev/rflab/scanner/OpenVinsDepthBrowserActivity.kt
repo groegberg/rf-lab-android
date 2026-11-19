@@ -169,7 +169,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
             worldMode=false
             display()
         }
-        all=button("Gesamtkarte · OpenVINS"){
+        all=button(if (drift) "Gesamtkarte gesperrt" else "Gesamtkarte · OpenVINS"){
             worldMode=true
             display()
         }
@@ -261,7 +261,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
         nav.addView(seek,LinearLayout.LayoutParams(0,dp(43),1f))
         nav.addView(next,LinearLayout.LayoutParams(dp(110),dp(43)))
         root.addView(nav)
-        worldMode=worldFile!=null && worldImages>0
+        worldMode=!drift && worldFile!=null && worldImages>0
         display()
     }
 
@@ -286,7 +286,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
         depthAlignedButton.text=if(aligned)
             "● ORB-angepasst" else "ORB-angepasst"
         one.isEnabled=w
-        all.isEnabled=!w && worldFile!=null
+        all.isEnabled=!drift && !w && worldFile!=null
         previous.isEnabled=!w && current>0
         next.isEnabled=!w && current<photos.lastIndex
         seek.isEnabled=!w && photos.isNotEmpty()
@@ -294,9 +294,7 @@ class OpenVinsDepthBrowserActivity:Activity() {
         if(w) {
             headline.text="GESAMTKARTE · "+worldImages+
                 " Aufnahmen auf OpenVINS-Posen · "+worldPoints+" Farbpunkte"
-            warning.text=(if(drift)
-                "⚠ VIO-DRIFT: Trajektorie unplausibel. " else "")+
-                worldAligned+" Bilder geometrisch tiefenangepasst · "+
+            warning.text=worldAligned.toString()+" Bilder geometrisch tiefenangepasst · "+
                 worldApproximate+" nur approximativ · KEIN Metermaßstab."
             rgbImage.visibility=View.GONE
             depthImage.visibility=View.GONE
@@ -308,7 +306,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
                     " · DA3 "+frame.rotation+"°"
                 else "Keine DA3-3D-Einzelbilder in dieser Auswertung"
             warning.text=if(frame!=null)
-                (if(frame.pose>=0)
+                (if(drift && frame.pose>=0) "VIO-Pfad verworfen. "
+                 else if(frame.pose>=0)
                     "VIO-Pose #"+frame.pose+
                         if(frame.worldProjected)" · Teil der Gesamtansicht. "
                         else " · Nicht in Gesamtansicht. "

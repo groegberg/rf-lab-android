@@ -163,9 +163,9 @@ internal class OpenVinsSessionImport(private val context: Context) {
                 }
             }
             val rawPoses=ExternalVioTrajectory.read(session)
-            require(rawPoses.isNotEmpty()){
-                "Kein gültiger nativer VIO-Kamerapfad im ZIP gefunden"
-            }
+            require(poseWritten) { "Native OpenVINS-Trajektoriendatei fehlt" }
+            val poseSource = if (rawPoses.isEmpty()) "OpenVINS capture without a usable pose"
+                else "OpenVINS native MSCKF research, uncalibrated"
             val rgb=staging.listFiles()
                 ?.filter { it.isFile && it.extension=="jpg" }
                 ?.sortedBy {it.nameWithoutExtension.toLongOrNull()?:0L}
@@ -178,7 +178,7 @@ internal class OpenVinsSessionImport(private val context: Context) {
                 val match=ExternalVioTrajectory.closestIndex(rawPoses,ts)
                 val meta=JSONObject()
                     .put("timestamp_ns",ts)
-                    .put("pose_source","OpenVINS native MSCKF research, uncalibrated")
+                    .put("pose_source",poseSource)
                     .put("image_source","OpenVINS Mobile Camera2 RGB frame")
                     .put("source_file",photo.name)
                     .put("external_vio_pose_index",match)
@@ -190,7 +190,7 @@ internal class OpenVinsSessionImport(private val context: Context) {
             File(session,"session.json").writeText(JSONObject()
                 .put("schema","rflab-camera2-session-v1")
                 .put("source","OpenVINS Mobile GPLv3 separate research app")
-                .put("pose_source","Imported native MSCKF VIO, uncalibrated")
+                .put("pose_source",poseSource)
                 .put("metric_calibration_validated",false)
                 .put("source_timestamp_epoch","Camera2 sensor nanoseconds")
                 .put("source_pose_count",rawPoses.size)

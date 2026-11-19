@@ -64,8 +64,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
     private var captureFpsSlowdown = false
     private var maxExposureMs:Double?=null
     private var currentHealth: VioInitializationHealth? = null
-    private var latestPosition: FloatArray? = null
-    private var latestQuaternion: DoubleArray? = null
+    private var liveMotion = LiveVioMotion()
     private val oldId = com.openvins.android.R.id.trajectory_view
     private val healthHandler = Handler(Looper.getMainLooper())
     // Independent UI watchdog: when the native MSCKF worker stops returning
@@ -118,6 +117,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             ?: error("Native OpenVINS camera view missing")
         container.removeView(nativeRoot)
         nativeRoot.findViewById<View>(oldId)?.visibility = View.GONE
+        nativeRoot.findViewById<View>(com.openvins.android.R.id.vio_health_status)?.visibility = View.GONE
         for (id in listOf(com.openvins.android.R.id.toggle_reset,
                 com.openvins.android.R.id.toggle_record,
                 com.openvins.android.R.id.open_folder)) {
@@ -224,7 +224,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         setContentView(root)
         SystemBarsSafeArea.install(this, root)
         if (scan.poseCount() > 0) {
-            stateLabel.text = "Vorheriger VIO-Kamerapfad · " +
+            stateLabel.text = "Letzte VIO-Vorschau (ungeprüft) · " +
                 scan.poseCount() + " Positionen"
             detailLabel.text = "Getrennte OpenVINS-Karte · Kein ARCore-Mischscan. " +
                 "Für einen neuen Scan werden nur diese VIO-Positionen ersetzt."
@@ -252,8 +252,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         scan.poseSource = "OpenVINS native MSCKF; own Z-up VIO frame; " +
             "mapped to Y-up for preview; NOT calibrated/registered to ARCore"
         nativePoseSeen = false
-        latestPosition = null
-        latestQuaternion = null
+        liveMotion = LiveVioMotion()
         lastUiNs = 0L
         lastSavedNs = 0L
         lastDiagNs = 0L
@@ -273,9 +272,9 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                 .put("metric_calibration_validated", false)
                 .put("arcore_frame_registered", false))
             startButton.text = "■ Scan stoppen"
-            stateLabel.text = "○ Initialisierung · erst 3–5 Sekunden ruhig halten"
-            detailLabel.text = "Das Smartphone möglichst ruhig halten, dann langsam " +
-                "seitwärts bewegen. Kamera/IMU werden nativ erfasst."
+            stateLabel.text = "○ Initialisierung · Smartphone ruhig ablegen"
+            detailLabel.text = "Kamera auf ein strukturiertes Motiv richten. Erst bei der ersten VIO-Pose " +
+                "langsam seitwärts bewegen."
             cloud.invalidate()
         } catch (t: Throwable) {
             stateLabel.text = "OpenVINS-Start fehlgeschlagen: " +
@@ -283,13 +282,22 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
         }
     }
 
-    override fun onNativePoseReady(position: DoubleArray, quaternion: DoubleArray) {
-        if (!recording) return
+    override fun onNativePoseReady(timestampNs: Long, position: DoubleArray, quaternion: DoubleArray) {
+        if (!recording || liveMotion.rejected) return
+        nativePoseSeen = true
+        when (liveMotion.observe(timestampNs, position[0], position[1], position[2])) {
+            LiveVioMotion.Result.REPEAT -> return
+            LiveVioMotion.Result.REJECT -> {
+                stateLabel.text = "⚠ VIO-Pfad verworfen"
+                detailLabel.text = "Unplausible Bewegung. RGB und IMU werden weiter aufgezeichnet."
+                sessionEvents.write("vio_motion_rejected", JSONObject().put("camera_timestamp_ns", timestampNs))
+                scan.save()
+                return
+            }
+            LiveVioMotion.Result.ACCEPT -> Unit
+        }
         val mapped = OpenVinsPoseTransform.toMap(position) ?: return
         if (!OpenVinsPoseTransform.validQuaternion(quaternion)) return
-        nativePoseSeen = true
-        latestPosition = mapped
-        latestQuaternion = quaternion.copyOf()
         scan.addPose(JSONObject().put("state", "TRACKING")
             .put("position_m", JSONArray()
                 .put(mapped[0].toDouble())
@@ -309,7 +317,8 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                 .put("quaternion_native_wxyz", JSONArray()
                     .put(quaternion[0]).put(quaternion[1])
                     .put(quaternion[2]).put(quaternion[3]))
-                .put("timestamp_type", "RF Lab callback elapsedRealtimeNanos"))
+                .put("camera_timestamp_ns", timestampNs)
+                .put("timestamp_type", "OpenVINS camera hardware nanoseconds"))
             stateLabel.text = "● Native VIO-Pose · " +
                 scan.poseCount() + " Kamerapunkte"
             detailLabel.text = String.format(Locale.GERMANY,
@@ -365,6 +374,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                 else "")
             // Native initialized=true is a latched state, not a live pose
             // quality signal. Surface processing stalls while recording.
+            if (liveMotion.rejected) return
             if(health.initialized && health.processedAgeMs!=null &&
                 health.processedAgeMs!!>1800.0) {
                 stateLabel.text="⚠ "+health.issue
@@ -377,8 +387,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
                     health.processedCamera >= 10 &&
                     health.expiredCamera <= health.processedCamera) {
                     detailLabel.text = "VIO hat Eingabedaten: " +
-                        "Handy zunächst 3–5 s ruhig halten; " +
-                        "danach langsam bewegen. Keine Pose wird simuliert."
+                        "Handy mit freier Kamera ruhig ablegen und bis zur ersten VIO-Pose warten."
                 }
             }
         } catch (error: Throwable) {
@@ -450,6 +459,7 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             "Native diagnostics unavailable") +
             "\nRF Lab live VIO poses=" + scan.poseCount() +
             "\nRF Lab nativePoseSeen=" + nativePoseSeen +
+            "\nRF Lab liveMotionRejected=" + liveMotion.rejected +
             "\n" + cameraDiagnostics()
     }
 
@@ -560,10 +570,13 @@ class OpenVinsScanActivity : com.openvins.android.MainActivity() {
             sessionEvents.write("spatial_optical_scan_end", JSONObject()
                 .put("backend", "OpenVINS")
                 .put("native_camera_poses", scan.poseCount())
-                .put("native_pose_initialized", nativePoseSeen))
+                .put("native_pose_initialized", nativePoseSeen)
+                .put("live_motion_rejected", liveMotion.rejected))
             sessionEvents.stop()
             startButton.text = "● Neuer Scan"
-            stateLabel.text = if (nativePoseSeen)
+            stateLabel.text = if (liveMotion.rejected)
+                "⚠ RGB und IMU gesichert · VIO-Pfad verworfen"
+            else if (nativePoseSeen)
                 "✓ Aufnahme gesichert · " + scan.poseCount() + " VIO-Positionen"
             else "⚠ Aufnahme beendet · Keine initialisierte OpenVINS-Pose"
             detailLabel.text = "Native RGB-/IMU-/Pose-Daten liegen in RF Lab. " +

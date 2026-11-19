@@ -24,11 +24,28 @@ def write(path: pathlib.Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
+def apply_tracking_updates() -> None:
+    patches = PROJECT / "research" / "openvins"
+    core = SOURCE / "app" / "src" / "main" / "cpp" / "open_vins"
+    for checkout, name in ((core, "static-start.patch"), (SOURCE, "camera-pose.patch")):
+        patch = str(patches / name)
+        # Both a freshly pinned checkout and a previously prepared build are supported.
+        if subprocess.run(["git", "apply", "--reverse", "--check", patch],
+                          cwd=checkout, capture_output=True).returncode:
+            run("git", "apply", "--check", patch, cwd=checkout)
+            run("git", "apply", patch, cwd=checkout)
+    header = patches / "steady_gyro.h"
+    installed = core / "ov_init" / "src" / "static" / header.name
+    if not installed.exists() or installed.read_bytes() != header.read_bytes():
+        shutil.copyfile(header, installed)
+
+
 def main() -> None:
     marker = SOURCE / ".rf_lab_embedded_v1"
     if marker.exists():
         if marker.read_text().strip() != PIN:
             raise RuntimeError("Unexpected OpenVINS source pin")
+        apply_tracking_updates()
         print("Pinned embedded OpenVINS source is already prepared")
         return
     if SOURCE.exists():
@@ -208,6 +225,7 @@ android {
     license_path = PROJECT / "app" / "src" / "main" / "assets" / "licenses" / "openvins-gplv3.txt"
     license_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SOURCE / "LICENSE", license_path)
+    apply_tracking_updates()
     write(marker, PIN + "\n")
     print("OpenVINS embedded Android module prepared. Not Pixel-calibrated.")
 

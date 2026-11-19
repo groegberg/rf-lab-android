@@ -1,0 +1,52 @@
+--- a/ov_init/src/static/StaticInitializer.cpp
++++ b/ov_init/src/static/StaticInitializer.cpp
+@@ -21,4 +21,5 @@
+
+ #include "StaticInitializer.h"
++#include "steady_gyro.h"
+
+ #include "utils/helper.h"
+@@ -67,4 +68,13 @@
+   if (window_1to0.size() < 2 || window_2to1.size() < 2) {
+     PRINT_INFO(YELLOW "[init-s]: unable to select window of IMU readings, not enough readings\n" RESET);
++    return false;
++  }
++
++  // The older half supplies the bias. Both halves must be still for a
++  // stationary start. Preserve deliberate jerk starts in the newer half.
++  const double half_window = 0.5 * params.init_window_time;
++  if (!rf_lab::steady_gyro(window_2to1, half_window) ||
++      (!wait_for_jerk && !rf_lab::steady_gyro(window_1to0, half_window))) {
++    PRINT_DEBUG(YELLOW "[init-s]: waiting for a quiet gyroscope window\n" RESET);
+     return false;
+   }
+--- a/ov_msckf/src/core/VioManager.h
++++ b/ov_msckf/src/core/VioManager.h
+@@ -120,4 +120,7 @@
+   std::vector<Eigen::Vector3d> get_features_ARUCO();
+
++  /// Camera worker only. Tracks surviving MSCKF rejection for the current frame.
++  size_t msckf_tracks_kept() const { return last_msckf_tracks_kept; }
++
+   /// Returns 3d features used in the last update in global frame
+   std::vector<Eigen::Vector3d> get_good_features_MSCKF() { return good_features_MSCKF; }
+@@ -232,4 +235,5 @@
+   // Good features that where used in the last update (used in visualization)
+   std::vector<Eigen::Vector3d> good_features_MSCKF;
++  size_t last_msckf_tracks_kept = 0;
+
+   // Re-triangulated features 3d positions seen from the current frame (used in visualization)
+--- a/ov_msckf/src/core/VioManager.cpp
++++ b/ov_msckf/src/core/VioManager.cpp
+@@ -255,4 +255,5 @@
+
+ void VioManager::track_image_and_update(const ov_core::CameraData &message_const) {
++  last_msckf_tracks_kept = 0;
+
+   // Start timing
+@@ -524,4 +525,5 @@
+     featsup_MSCKF.erase(featsup_MSCKF.begin(), featsup_MSCKF.end() - state->_options.max_msckf_in_update);
+   updaterMSCKF->update(state, featsup_MSCKF);
++  last_msckf_tracks_kept = featsup_MSCKF.size();
+   propagator->invalidate_cache();
+   rT4 = boost::posix_time::microsec_clock::local_time();

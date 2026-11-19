@@ -1,0 +1,143 @@
+--- a/app/src/main/cpp/native-lib.cpp
++++ b/app/src/main/cpp/native-lib.cpp
+@@ -1,4 +1,5 @@
+ #include <atomic>
+ #include <cassert>
++#include <cmath>
+ #include <condition_variable>
+ #include <errno.h>
+@@ -126,4 +127,6 @@
+ std::vector<TrajectoryPoint> trajectory_history;
+ std::mutex trajectory_mtx;
++// Camera timestamp of trajectory_history.back(), under the same lock.
++jlong latest_pose_ns = 0;
+ const size_t MAX_TRAJECTORY_POINTS = 10000; // Limit trajectory size
+
+@@ -294,9 +297,10 @@
+
+       // Display things if we have initialized
+-      if (sys->initialized()) {
++      if (sys->initialized() && std::abs(state->_timestamp - cam_msg.timestamp) < 1e-6) {
+         diag_initialized.store(1);
+         // Store trajectory point (camera pose)
+         // q_cam is JPL format [qx, qy, qz, qw], but TrajectoryPoint expects [qw, qx, qy, qz]
+         std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
++        latest_pose_ns = std::llround(state->_timestamp * 1e9);
+         trajectory_history.emplace_back(p_cam(0), p_cam(1), p_cam(2), q_cam(3), q_cam(0), q_cam(1), q_cam(2));
+         // Only initialized native MSCKF poses enter the exported trajectory.
+@@ -304,5 +308,5 @@
+           std::lock_guard<std::mutex> output_guard(pose_csv_mtx);
+           if (pose_csv.is_open()) {
+-            const auto ts_ns = (unsigned long long)(cam_msg.timestamp * 1e9);
++            const auto ts_ns = latest_pose_ns;
+             // Use calibration at the SAME VIO camera timestamp as the pose.
+             // State variables change during online estimation and the
+@@ -320,5 +324,12 @@
+             for (int k = 0; k < 4; k++) pose_csv << "," << qIc(k);
+             for (int k = 0; k < 3; k++) pose_csv << "," << pIc(k);
+-            pose_csv << "," << dt << "\n";
++            pose_csv << "," << dt;
++            const auto bg = state->_imu->bias_g();
++            const auto ba = state->_imu->bias_a();
++            const auto vel = state->_imu->vel();
++            for (int k = 0; k < 3; ++k) pose_csv << "," << bg(k);
++            for (int k = 0; k < 3; ++k) pose_csv << "," << ba(k);
++            for (int k = 0; k < 3; ++k) pose_csv << "," << vel(k);
++            pose_csv << "," << sys->msckf_tracks_kept() << "," << state->_features_SLAM.size() << "\n";
+           }
+         }
+@@ -433,5 +444,7 @@
+           << ",fx,fy,cx,cy,k1,k2,p1,p2"
+           << ",qx_ItoC,qy_ItoC,qz_ItoC,qw_ItoC"
+-          << ",px_IinC,py_IinC,pz_IinC,cam_imu_timeoffset_s" << std::endl;
++          << ",px_IinC,py_IinC,pz_IinC,cam_imu_timeoffset_s"
++          << ",bg_x_rad_s,bg_y_rad_s,bg_z_rad_s,ba_x_m_s2,ba_y_m_s2,ba_z_m_s2"
++          << ",vx_G,vy_G,vz_G,msckf_tracks_kept,slam_landmarks_in_state" << std::endl;
+     }
+
+@@ -513,4 +526,5 @@
+       std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
+       trajectory_history.clear();
++      latest_pose_ns = 0;
+     }
+     {
+@@ -933,40 +947,15 @@
+
+ // JNI functions for trajectory visualization
+-extern "C" JNIEXPORT jboolean JNICALL Java_com_openvins_android_MainActivity_getCurrentPoseJNI(JNIEnv *env, jobject instance,
+-                                                                                               jdoubleArray position,
+-                                                                                               jdoubleArray quaternion) {
+-  if (sys == nullptr || !is_running_ov || !sys->initialized()) {
+-    return JNI_FALSE;
+-  }
+-
+-  auto state = sys->get_state();
+-  if (state == nullptr) {
+-    return JNI_FALSE;
+-  }
+-
+-  auto q_GtoI = state->_imu->quat();
+-  auto p_IinG = state->_imu->pos();
+-
+-  // Transform IMU pose to camera pose using calibration
+-  assert(state->_calib_IMUtoCAM.find(0) != state->_calib_IMUtoCAM.end() && "Camera calibration for camera 0 must exist");
+-  auto calib = state->_calib_IMUtoCAM.at(0);
+-  Eigen::Vector4d q_ItoC = calib->quat();
+-  Eigen::Vector3d p_IinC = calib->pos();
+-
+-  // Compose rotations: q_GtoC = q_ItoC * q_GtoI
+-  Eigen::Vector4d q_cam = ov_core::quat_multiply(q_ItoC, q_GtoI);
+-
+-  // Transform position: p_CinG = p_IinG - R_GtoC * p_IinC
+-  // where R_GtoC = quat_2_Rot(q_GtoC).transpose()
+-  Eigen::Vector3d p_cam = p_IinG - ov_core::quat_2_Rot(q_cam).transpose() * p_IinC;
+-
+-  jdouble pos[3] = {p_cam(0), p_cam(1), p_cam(2)};
+-  // Convert JPL [qx, qy, qz, qw] to Hamilton [qw, qx, qy, qz] for Java
+-  jdouble quat[4] = {q_cam(3), q_cam(0), q_cam(1), q_cam(2)};
+-
++extern "C" JNIEXPORT jlong JNICALL Java_com_openvins_android_MainActivity_getCurrentPoseJNI(
++    JNIEnv *env, jobject, jdoubleArray position, jdoubleArray quaternion) {
++  // The UI must not read the EKF in the middle of a camera update.
++  std::lock_guard<std::mutex> lock(trajectory_mtx);
++  if (trajectory_history.empty() || latest_pose_ns <= 0) return 0;
++  const auto &p = trajectory_history.back();
++  const jdouble pos[] = {p.x, p.y, p.z};
++  const jdouble quat[] = {p.qw, p.qx, p.qy, p.qz};
+   env->SetDoubleArrayRegion(position, 0, 3, pos);
+   env->SetDoubleArrayRegion(quaternion, 0, 4, quat);
+-
+-  return JNI_TRUE;
++  return latest_pose_ns;
+ }
+
+--- a/app/src/main/java/com/openvins/android/MainActivity.kt
++++ b/app/src/main/java/com/openvins/android/MainActivity.kt
+@@ -316,5 +316,5 @@
+         timestampSec: Double
+     )
+-    private external fun getCurrentPoseJNI(position: DoubleArray, quaternion: DoubleArray): Boolean
++    private external fun getCurrentPoseJNI(position: DoubleArray, quaternion: DoubleArray): Long
+     // Combined function: returns number of points copied (0 on error/empty)
+     // Arrays must be pre-allocated with sufficient size (max_size * 3 for positions, max_size * 4 for quaternions)
+@@ -332,5 +332,6 @@
+         val currentPos = DoubleArray(3)
+         val currentQuat = DoubleArray(4)
+-        if (!getCurrentPoseJNI(currentPos, currentQuat)) {
++        val poseTimestampNs = getCurrentPoseJNI(currentPos, currentQuat)
++        if (poseTimestampNs <= 0L) {
+             hud.text = "OpenVINS · INIT · zunächst 3–5 s ruhig halten"
+             onNativePoseUnavailable()
+@@ -340,4 +341,4 @@
+             "OpenVINS · VIO läuft · %.2f / %.2f / %.2f (unkalibrierte m)",
+             currentPos[0],currentPos[1],currentPos[2])
+-        onNativePoseReady(currentPos, currentQuat)
++        onNativePoseReady(poseTimestampNs, currentPos, currentQuat)
+         if (!renderLegacyTrajectoryOverlay()) return
+@@ -458,5 +459,5 @@
+      *  Calibration, coordinate registration and metric scale are NOT validated.
+      */
+-    protected open fun onNativePoseReady(position: DoubleArray, quaternion: DoubleArray) {}
++    protected open fun onNativePoseReady(timestampNs: Long, position: DoubleArray, quaternion: DoubleArray) {}
+
+     /** Called during VIO initialization or tracking loss; no fake pose. */

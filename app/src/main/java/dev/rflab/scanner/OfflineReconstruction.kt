@@ -61,6 +61,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
         require(folder.mkdirs()){"Cannot create offline run"}
         val warnings=ArrayList<String>()
         val external=ExternalVioTrajectory.read(session)
+        val nativeCapture = File(session, "external_vio_trajectory.csv").isFile
         var poses:OfflineVisualOdometry.Result?=null
         if(external.isNotEmpty()){
             // The VIO is native OpenVINS MSCKF, not RF Lab's unit-step VO.
@@ -75,6 +76,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .put("metric_calibration_validated",false)
                     .put("loop_closure_optimized",false)
                     .toString(2))
+        } else if (nativeCapture) {
+            warnings += "OpenVINS lieferte keine nutzbare Kamerapose. DA3 zeigt die Einzelaufnahmen."
         } else {
             try {
                 update("1/2 · OpenCV verfolgt Kamera und prüft IMU …")
@@ -154,7 +157,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 " RGB-Fotos; Bilder ohne VIO-Pose bleiben einzeln durchsuchbar"
         val cameraEvidence=if(external.isNotEmpty())
             OpenVinsCameraEvidence.read(session) else null
-        val initialCalibration=if(external.isNotEmpty())
+        val initialCalibration=if(nativeCapture)
             OpenVinsDa3Fusion.calibration(session) else null
         val onlineQuality=if(external.isNotEmpty())
             OpenVinsOnlineCalibrationHealth.inspect(external,initialCalibration)
@@ -223,7 +226,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
         // Native ImageReader JPEGs are sensor-coordinate pixels. Align DA3
         // input orientation using measured IMU gravity and the recorded
         // camera<-IMU extrinsic, NEVER the landscape-locked UI orientation.
-        val imu=if(external.isNotEmpty())
+        val imu=if(nativeCapture)
             OpenVinsImageOrientation.readImu(session) else emptyList()
         if(external.isNotEmpty()){
             val imuAudit=OpenVinsImuQualityAudit.inspect(imu)
@@ -247,7 +250,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     .toString(2))
             warnings+=imuAudit.warnings
         }
-        val rotationMatrix=if(external.isNotEmpty())
+        val rotationMatrix=if(nativeCapture)
             File(session,"external_calibration/kalibr_imucam_chain.yaml")
                 .takeIf{it.isFile}?.let{
                     OpenVinsImageOrientation.camFromImu(it.readText())
@@ -399,7 +402,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // intrinsics, EVEN IF the gyro baseline cannot be certified.
                 // It is a visible, nonmetric diagnostic, NOT a stored map.
                 val approximateCamera=frameCalibration ?:initialCalibration
-                if(approximateCamera!=null && photoPose!=null &&
+                if(motionQuality?.acceptableForExperimentalGeometry==true &&
+                    approximateCamera!=null && photoPose!=null &&
                     good.size>=100)try{
                     if(approximateCamera.compatibleWith(
                             sourceWidth,sourceHeight)){
@@ -540,6 +544,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         else matched?.accepted?:false)
                     .put("pose_source",if(external.isNotEmpty())
                         "OpenVINS native MSCKF, unvalidated"
+                        else if (nativeCapture) "unavailable"
                         else "OpenCV relative monocular VO")
                     .put("external_camera_position_unvalidated",
                         photoPose?.let{JSONArray(it.center().toList())}
@@ -596,7 +601,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 " geometrisch tiefenangepasst, "+
                 worldDiagnostic.approximateFrames+
                 " mit NUR approximativer Tiefe (kein Maßstab)"
-        }else if(external.isNotEmpty())
+        }else if(motionQuality?.acceptableForExperimentalGeometry==true)
             warnings+="Keine RGB-Bilder zeitlich/geometrisch zur "+
                 "OpenVINS-Trajektorie zuordnungsfähig"
         val mapSamples=ArrayList<SurveyDepth>()

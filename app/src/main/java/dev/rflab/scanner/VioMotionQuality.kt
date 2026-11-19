@@ -70,17 +70,21 @@ internal object VioMotionQuality {
             reasons+="Ungültige Dauer der VIO-Aufnahme"
         if(!path.isFinite() || !displacement.isFinite())
             reasons+="Ungültige VIO-Positionswerte"
-        if(p90>4.5)
+        if(p90>LiveVioMotion.MAX_SUSTAINED_SPEED)
             reasons+="90%-VIO-Geschwindigkeit "+
                 String.format(Locale.US,"%.1f",p90)+
                 " Einheiten/s: unplausible Raumbewegung"
-        if(maximum>12.0)
+        if(maximum>LiveVioMotion.MAX_STEP_SPEED)
             reasons+="VIO-Sprung: "+
                 String.format(Locale.US,"%.1f",maximum)+" Einheiten/s"
         if(duration in 1.0..30.0 && displacement>25.0)
             reasons+="In "+String.format(Locale.US,"%.1f",duration)+
                 " s "+String.format(Locale.US,"%.1f",displacement)+
                 " VIO-Einheiten verschoben; vermutlich Filterdrift"
+        // A short divergent section may disappear in the whole-session 90th percentile.
+        val live = LiveVioMotion()
+        if (reasons.isEmpty() && poses.any { live.observe(it.timestampNs, it.x, it.y, it.z) == LiveVioMotion.Result.REJECT })
+            reasons += "Abschnitt mit anhaltend unplausibler VIO-Bewegung"
         return Report(reasons.isEmpty(),duration,path,displacement,median,
             p90,maximum,poses.size,reasons)
     }

@@ -19,7 +19,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 gradle_command="${GRADLE_COMMAND:-gradle}"
 source_revision="$(git rev-parse HEAD)"
-export ORG_GRADLE_PROJECT_rfLabParallelTest=true
+export ORG_GRADLE_PROJECT_rfLabTrackingTest=true
 export ORG_GRADLE_PROJECT_rfLabSourceRevision="$source_revision"
 if [[ ! -x "$(command -v "$gradle_command" 2>/dev/null || true)" ]]; then
   echo "Gradle 8.13 must be installed and in PATH; export GRADLE_COMMAND if needed." >&2
@@ -57,12 +57,12 @@ python3 tools/check_elf_16k.py "$apk" --strict
 "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$apk"
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify "$apk"
 "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" |
-  grep -F "package: name='dev.rflab.scanner.pixeltest' versionCode='25' versionName='1.3.9-qa.1+${ORG_GRADLE_PROJECT_rfLabSourceRevision:0:8}'"
+  grep -F "package: name='dev.rflab.scanner.trackingtest' versionCode='26' versionName='1.3.10-qa.1+${ORG_GRADLE_PROJECT_rfLabSourceRevision:0:8}'"
 
 echo "[5/5] Copy verified PRIVATE Pixel APK"
 out_dir=private-build
 mkdir -p "$out_dir"
-out="$out_dir/RF-Lab-v1.3.9-Geometry-Calib-Quality-Pixel-LOCAL-PRIVATE.apk"
+out="$out_dir/RF-Lab-v1.3.10-Tracking-Pixel-LOCAL-PRIVATE.apk"
 cp "$apk" "$out"
 sha256sum "$out" | tee "$out.sha256"
 git rev-parse HEAD | tee "$out.source-commit.txt"
