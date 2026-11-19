@@ -118,6 +118,21 @@ internal object OpenVinsDa3Geometry {
         return doubleArrayOf(ux, uy, 1.0)
     }
 
+    /** Return undistorted [x/z, y/z, 1] camera ray for the exact
+     * DA3 model pixel (including physical-roll undo + center crop).
+     * This is also used for single-frame previews so FOV is NOT guessed.
+     */
+    fun modelRay(modelX:Double, modelY:Double,
+                 calibration:Calibration,
+                 sourceWidth:Int,sourceHeight:Int,
+                 rotationDegrees:Int):DoubleArray? {
+        val pixel=sourcePixel(modelX,modelY,sourceWidth,sourceHeight,
+            Da3DepthEngine.WIDTH,Da3DepthEngine.HEIGHT,
+            rotationDegrees) ?:return null
+        return opticalRay(pixel[0],pixel[1],calibration,
+            sourceWidth,sourceHeight)
+    }
+
     /** Project real native pose and one positive relative depth to map axes. */
     fun mapPoint(sample: ExternalVioTrajectory.Sample,
                  calibration: Calibration, sourceX: Double, sourceY: Double,
