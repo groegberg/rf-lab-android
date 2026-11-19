@@ -27,7 +27,11 @@ internal class OfflineReconstruction(private val context:android.content.Context
                        val sparsePreview:List<SurveyDepth> = emptyList(),
                        val relativePreview:List<SurveyDepth> = emptyList(),
                        val multiViewResearchPreview:List<SurveyDepth> = emptyList(),
-                       val motionQuality:VioMotionQuality.Report? = null)
+                       val motionQuality:VioMotionQuality.Report? = null,
+                       val worldDiagnosticPoints:List<SurveyDepth> = emptyList(),
+                       val worldDiagnosticFrames:Int = 0,
+                       val worldAlignedFrames:Int = 0,
+                       val worldApproximateFrames:Int = 0)
 
     companion object {
         fun closestIndex(poses:List<OfflineVisualOdometry.Pose>,
@@ -141,16 +145,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     motionQuality.reasons.joinToString(" · ")
         }
         if(photos.isEmpty())warnings+="Keine hochauflösenden Fotos vorhanden"
-        // Camera2 captures photos before OpenVINS initializes. In the
-        // uploaded Pixel scan the first ~13 s have NO native camera pose.
-        // Do not waste the 24 inference slots on untriangulatable frames.
-        // All original photos are retained in the imported photo session.
-        val selected=VioKeyframeSelection.selectIndices(
-            photos.map{it.json.optLong("timestamp_ns")},external,24)
-            .map{photos[it]}
+        // User needs per-image evaluation, including frames recorded before
+        // MSCKF initialization. Sequentially run DA3 on EVERY saved RGB JPEG;
+        // only timestamp-matched frames may contribute to the diagnostic map.
+        val selected=photos
         if(external.isNotEmpty())
-            warnings+="DA3 analysiert "+selected.size+
-                " pose-zugeordnete RGB-Bilder (Init-Bilder bleiben gesichert)"
+            warnings+="DA3 analysiert ALLE "+selected.size+
+                " RGB-Fotos; Bilder ohne VIO-Pose bleiben einzeln durchsuchbar"
         val cameraEvidence=if(external.isNotEmpty())
             OpenVinsCameraEvidence.read(session) else null
         val initialCalibration=if(external.isNotEmpty())
@@ -243,6 +244,10 @@ internal class OfflineReconstruction(private val context:android.content.Context
         var relativePreview=emptyList<SurveyDepth>()
         val candidateFeatures=ArrayList<OpenVinsDa3MultiView.Frame>()
         val candidateRays=HashMap<Int,List<OpenVinsDa3Fusion.RaySample>>()
+        // Separate research-only, pose-projected rays even when strict
+        // gyroscope/extrinsic evidence blocks the certified map namespace.
+        val diagnosticWorldFrames=
+            ArrayList<OpenVinsDa3DiagnosticWorld.Frame>()
         var fusedFrames=0
         var done=0;var paired=0
         var last:android.graphics.Bitmap?=null
@@ -318,19 +323,51 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     good.size<100 -> "KI-Tiefenkarte enthält zu wenige Werte"
                     else -> "Geometrische ORB-Merkmale werden geprüft"
                 }
-                // First successful DA3 image can be viewed in 3D immediately.
-                // No VIO pose, metric range or multi-view fusion is invented.
-                if(relativePreview.isEmpty() && good.size>=100){
-                    try {
-                        val candidate=OpenVinsDa3RelativePreview.make(inference)
-                        if(candidate.size>=100){
-                            relativePreview=candidate
-                            onRelativePreview(candidate)
+                // Cache each real-colored 2.5D DA3 preview on disk. This
+                // supports scrubbing through ALL images without rerunning
+                // a heavyweight on-device neural network.
+                val cloudName="relative_%04d.rgbxyz".format(i)
+                var relativeCount=0
+                if(good.size>=100)try{
+                    val points=OpenVinsDa3RelativePreview.make(inference)
+                    if(points.size>=50){
+                        OpenVinsRgbCloudCache.write(folder,cloudName,points)
+                        relativeCount=points.size
+                        if(relativePreview.isEmpty()){
+                            relativePreview=points
+                            onRelativePreview(points)
                         }
-                    }catch(t:Throwable){
-                        warnings+="DA3-Einzelbild-Punktwolke: "+
-                            (t.message?:t.javaClass.simpleName)
                     }
+                }catch(t:Throwable){
+                    warnings+="RGB-Tiefenvorschau Foto "+(i+1)+": "+
+                        (t.message?:t.javaClass.simpleName)
+                }
+                // For research purposes, back-project each real RGB image
+                // with its own nearest native VIO camera pose and Camera2
+                // intrinsics, EVEN IF the gyro baseline cannot be certified.
+                // It is a visible, nonmetric diagnostic, NOT a stored map.
+                val approximateCamera=frameCalibration ?:initialCalibration
+                if(approximateCamera!=null && position>=0 &&
+                    external.isNotEmpty() && good.size>=100)try{
+                    val bounds=android.graphics.BitmapFactory.Options().apply{
+                        inJustDecodeBounds=true
+                    }
+                    android.graphics.BitmapFactory.decodeByteArray(
+                        jpeg,0,jpeg.size,bounds)
+                    if(approximateCamera.compatibleWith(
+                            bounds.outWidth,bounds.outHeight)){
+                        val rays=OpenVinsDa3Fusion.sampleUnscaled(
+                            inference,external[position],approximateCamera,
+                            bounds.outWidth,bounds.outHeight,lo,hi)
+                        if(rays.size>=50)
+                            diagnosticWorldFrames.add(
+                                OpenVinsDa3DiagnosticWorld.Frame(
+                                    i,position,rays,lo,hi,
+                                    imageOrientation?.usableForFusion==true))
+                    }
+                }catch(t:Throwable){
+                    warnings+="OpenVINS-Projektion Foto "+(i+1)+": "+
+                        (t.message?:t.javaClass.simpleName)
                 }
                 // Keep sparse ORB features plus ~2k true RGB camera rays
                 // per frame. Do NOT apply an invented median depth scale.
@@ -390,6 +427,11 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 manifest.put(JSONObject()
                     .put("source_photo_index",i)
                     .put("input_photo",photo.jpeg.name)
+                    .put("relative_rgb_cloud_file",
+                        if(relativeCount>0)cloudName else JSONObject.NULL)
+                    .put("relative_rgb_cloud_points",relativeCount)
+                    .put("diagnostic_world_pose_projected",
+                        diagnosticWorldFrames.any{it.photoIndex==i})
                     .put("timestamp_ns",photo.json.optLong("timestamp_ns"))
                     .put("depth_u16_file","$stem.u16")
                     .put("depth_preview_file","$stem.jpg")
@@ -471,6 +513,22 @@ internal class OfflineReconstruction(private val context:android.content.Context
         }finally{
             candidateFeatures.forEach{it.close()}
         }
+        val worldDiagnostic=OpenVinsDa3DiagnosticWorld.assemble(
+            diagnosticWorldFrames,fits,
+            useGeometricFits=motionQuality?.acceptableForExperimentalGeometry==true)
+        val worldDiagnosticPoints=worldDiagnostic.points
+        if(worldDiagnosticPoints.isNotEmpty()){
+            OpenVinsRgbCloudCache.write(folder,
+                "vio_world_diagnostic.rgbxyz",worldDiagnosticPoints)
+            warnings+="Gesamtansicht: "+worldDiagnostic.frames+
+                " RGB-Aufnahmen per OpenVINS-Pose verortet; "+
+                worldDiagnostic.geometryAlignedFrames+
+                " geometrisch tiefenangepasst, "+
+                worldDiagnostic.approximateFrames+
+                " mit NUR approximativer Tiefe (kein Maßstab)"
+        }else if(external.isNotEmpty())
+            warnings+="Keine RGB-Bilder zeitlich/geometrisch zur "+
+                "OpenVINS-Trajektorie zuordnungsfähig"
         val mapSamples=ArrayList<SurveyDepth>()
         var multiViewResearchPreview=emptyList<SurveyDepth>()
         val quality=JSONArray()
@@ -559,6 +617,19 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("sparse_orb_preview_points",sparsePreview.size)
                 .put("relative_single_image_preview_points",
                     relativePreview.size)
+                .put("cached_individual_rgb_clouds",done)
+                .put("world_diagnostic_file",
+                    if(worldDiagnosticPoints.isNotEmpty())
+                        "vio_world_diagnostic.rgbxyz" else JSONObject.NULL)
+                .put("world_diagnostic_frames",worldDiagnostic.frames)
+                .put("world_diagnostic_points",worldDiagnosticPoints.size)
+                .put("world_diagnostic_aligned_frames",
+                    worldDiagnostic.geometryAlignedFrames)
+                .put("world_diagnostic_approximate_frames",
+                    worldDiagnostic.approximateFrames)
+                .put("world_diagnostic_unreliable_rotation_frames",
+                    worldDiagnostic.unreliableRotationFrames)
+                .put("world_diagnostic_nonmetric",true)
                 .put("multiview_research_preview_points",
                     multiViewResearchPreview.size)
                 .put("vio_motion_gate_passed",
@@ -605,6 +676,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("sparse_orb_preview_points",sparsePreview.size)
             .put("per_frame_geometry_gate_counts",stageRejections)
             .put("relative_single_image_preview_points",relativePreview.size)
+            .put("world_diagnostic_frames",worldDiagnostic.frames)
+            .put("world_diagnostic_points",worldDiagnosticPoints.size)
+            .put("world_diagnostic_aligned_frames",
+                worldDiagnostic.geometryAlignedFrames)
+            .put("world_diagnostic_approximate_frames",
+                worldDiagnostic.approximateFrames)
+            .put("world_diagnostic_nonmetric",true)
             .put("multiview_research_preview_points",
                 multiViewResearchPreview.size)
             .put("vio_motion_gate_passed",
@@ -624,14 +702,17 @@ internal class OfflineReconstruction(private val context:android.content.Context
             .put("depth_maps",manifest)
             .put("warnings",JSONArray(warnings))
             .toString(2))
-        update("Fertig: "+done+" DA3-Bilder · "+
-            relativePreview.size+" relative RGB-3D-Punkte · "+
-            multiViewResearchPreview.size+" Mehrbild-Diagnosepunkte · "+
-            fusedPoints+" persistente Farbpunkte")
+        update("Fertig: "+done+" DA3-Bilder einzeln abrufbar · "+
+            worldDiagnostic.frames+" im VIO-Weltraum · "+
+            worldDiagnosticPoints.size+" Forschungs-Farbpunkte · "+
+            fusedPoints+" qualitätsgeprüfte Farbpunkte")
         return Summary(folder,
             if(external.isNotEmpty()) external.size else poses?.poses?.size?:0,
             poses?.inliers?:0,done,paired,poses?.rejected?:0,
             last,poses,warnings,external,fusedPoints,fusedFrames,
-            sparsePreview,relativePreview,multiViewResearchPreview,motionQuality)
+            sparsePreview,relativePreview,multiViewResearchPreview,motionQuality,
+            worldDiagnosticPoints,worldDiagnostic.frames,
+            worldDiagnostic.geometryAlignedFrames,
+            worldDiagnostic.approximateFrames)
     }
 }
