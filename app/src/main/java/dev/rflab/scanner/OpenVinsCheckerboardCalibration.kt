@@ -33,7 +33,8 @@ internal object OpenVinsCheckerboardCalibration {
         val intrinsics:DoubleArray?,
         val distortion:DoubleArray?,
         val sufficientForCameraIntrinsics:Boolean,
-        val issues:List<String>
+        val issues:List<String>,
+        val viewDiversity:OpenVinsChessboardDiversity.Report?=null
     ) {
         fun json():JSONObject=JSONObject()
             .put("source","OpenCV chessboard 9x6 inner corners")
@@ -55,6 +56,14 @@ internal object OpenVinsCheckerboardCalibration {
                 distortion?.let{JSONArray(it.toList())}?:JSONObject.NULL)
             .put("camera_intrinsics_candidate_valid",
                 sufficientForCameraIntrinsics)
+            .put("view_centroid_regions",viewDiversity?.occupiedRegions
+                ?:JSONObject.NULL)
+            .put("board_area_variation_ratio",
+                viewDiversity?.areaVariationRatio?:JSONObject.NULL)
+            .put("oblique_checkerboard_views",
+                viewDiversity?.obliqueViews?:JSONObject.NULL)
+            .put("checkerboard_view_diversity_adequate",
+                viewDiversity?.sufficientlyDiverse?:false)
             .put("warnings",JSONArray(issues))
     }
 
@@ -63,6 +72,7 @@ internal object OpenVinsCheckerboardCalibration {
         val issues=ArrayList<String>()
         val objectPoints=ArrayList<Mat>()
         val imagePoints=ArrayList<Mat>()
+        val boardViews=ArrayList<OpenVinsChessboardDiversity.View>()
         val expected=ArrayList<Point3>()
         for(y in 0 until 6)for(x in 0 until 9)
             expected.add(Point3(x.toDouble(),y.toDouble(),0.0))
@@ -101,6 +111,9 @@ internal object OpenVinsCheckerboardCalibration {
                             Size(-1.0,-1.0),
                             TermCriteria(TermCriteria.EPS+
                                 TermCriteria.MAX_ITER,40,.001))
+                        OpenVinsChessboardDiversity.view(
+                            corners.toArray().map{it.x to it.y},
+                            width,height)?.let{boardViews.add(it)}
                         val obj=MatOfPoint3f()
                         obj.fromList(expected)
                         objectPoints.add(obj)
@@ -116,7 +129,8 @@ internal object OpenVinsCheckerboardCalibration {
                 issues+="Mindestens 10 erfolgreiche Gitteransichten mit "+
                     "unterschiedlicher Neigung und Bildposition nötig"
                 return Result(detected,tested,width,height,null,null,null,
-                    false,issues)
+                    false,issues,
+                    OpenVinsChessboardDiversity.inspect(boardViews))
             }
             // Intrinsics estimable even if chessboard square size is
             // unknown; metric camera->IMU translation is NOT estimable here.
@@ -136,14 +150,20 @@ internal object OpenVinsCheckerboardCalibration {
             if(kotlin.math.abs(d[4])>.08)
                 issues+="Starker k3-Verzeichnungsanteil: native 4-Parameter "+
                     "radtan-Kalibrierung nicht ohne Prüfung übernehmen"
-            val valid=rms.isFinite() && rms<=1.0 &&
+            val diversity=OpenVinsChessboardDiversity.inspect(boardViews)
+            if(!diversity.sufficientlyDiverse)
+                issues+="Schachbrett-Ansichten zu ähnlich: mindestens 12 "+
+                    "erkannte Gitter, 3 Bildbereiche, wechselnde Abstände "+
+                    "und mehrere schräg gehaltene Perspektiven erforderlich"
+            val valid=diversity.sufficientlyDiverse &&
+                rms.isFinite() && rms<=1.0 &&
                 intr.all{it.isFinite()} &&
                 intr[0] in width*.2..width*5.0 &&
                 intr[1] in height*.2..height*5.0 &&
                 d.all{it.isFinite()} &&
                 kotlin.math.abs(d[4])<=.08
             return Result(detected,tested,width,height,
-                if(rms.isFinite())rms else null,intr,d,valid,issues)
+                if(rms.isFinite())rms else null,intr,d,valid,issues,diversity)
         }finally{
             objectPoints.forEach{it.release()}
             imagePoints.forEach{it.release()}
