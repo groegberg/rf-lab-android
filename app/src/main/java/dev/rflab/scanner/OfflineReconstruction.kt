@@ -618,12 +618,19 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 try {
                     OpenVinsRgbCloudCache.write(folder,alignedName,fused)
                     alignedRgbCaches++
+                    val alignedPlane=OpenVinsPlanarityAudit.inspect(fused)
                     for(manifestIdx in 0 until manifest.length()){
                         val entry=manifest.optJSONObject(manifestIdx)?:continue
                         if(entry.optInt("source_photo_index",-1)==index){
                             entry.put("aligned_rgb_cloud_file",alignedName)
                                 .put("aligned_rgb_cloud_points",fused.size)
                                 .put("aligned_rgb_cloud_is_metric_verified",false)
+                                .put("aligned_plane_support_fraction",
+                                    alignedPlane.dominantPlaneFraction)
+                                .put("aligned_plane_median_relative_residual",
+                                    alignedPlane.medianResidualToSpan
+                                        .takeIf{it.isFinite()}
+                                        ?:JSONObject.NULL)
                             break
                         }
                     }
