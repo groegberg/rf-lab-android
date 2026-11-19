@@ -75,9 +75,19 @@ internal object OpenVinsChessboardDiversity {
             br.first*bl.second-bl.first*br.second +
             bl.first*tl.second-tl.first*bl.second
         )*.5/(width.toDouble()*height)
-        // Dimensionless angular skew from orthogonality; this is only a
-        // weak proxy for a truly tilted checkerboard view.
-        val skew=abs((ux*vx+uy*vy)/(un*vn)).coerceIn(0.0,1.0)
-        return View(cx,cy,area,skew)
+        // A genuine oblique view can also keep the corner axes
+        // perpendicular (tilt around the checkerboard's horizontal or
+        // vertical axis). Capture perspective foreshortening through
+        // opposing edge length differences instead of demanding only skew.
+        val bottom=kotlin.math.hypot(br.first-bl.first,br.second-bl.second)
+        val right=kotlin.math.hypot(br.first-tr.first,br.second-tr.second)
+        if(bottom<2.0 || right<2.0)return null
+        val skew=abs((ux*vx+uy*vy)/(un*vn))
+        val vanishing=kotlin.math.max(
+            abs(kotlin.math.ln(un/bottom)),
+            abs(kotlin.math.ln(vn/right)))
+        val obliqueness=kotlin.math.max(skew,vanishing)
+            .coerceIn(0.0,1.0)
+        return View(cx,cy,area,obliqueness)
     }
 }
