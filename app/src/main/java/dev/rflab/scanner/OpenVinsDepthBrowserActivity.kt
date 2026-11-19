@@ -33,7 +33,8 @@ class OpenVinsDepthBrowserActivity:Activity() {
         val ordinal:Int,val imageName:String,val cloud:File,
         val depth:File,val pose:Int,val rotation:Int,
         val gate:String,val worldProjected:Boolean,
-        val dominantPlaneFraction:Double
+        val dominantPlaneFraction:Double,
+        val medianRgbLuma:Int,val rgbUsableForGeometry:Boolean
     )
 
     private val bg=Color.rgb(9,18,30)
@@ -114,7 +115,9 @@ class OpenVinsDepthBrowserActivity:Activity() {
                 item.optInt("da3_actual_rotation_degrees",0),
                 item.optString("geometry_gate_reason","unbekannt"),
                 item.optBoolean("diagnostic_world_pose_projected",false),
-                item.optDouble("dominant_plane_support_fraction",Double.NaN)))
+                item.optDouble("dominant_plane_support_fraction",Double.NaN),
+                item.optInt("rgb_median_luma_0_255",-1),
+                item.optBoolean("rgb_usable_for_multiview",false)))
         }
         photos=images.sortedBy{it.ordinal}
         worldFile=File(folder,"vio_world_diagnostic.rgbxyz")
@@ -270,6 +273,11 @@ class OpenVinsDepthBrowserActivity:Activity() {
                         "Ebenenanteil "+
                             (frame.dominantPlaneFraction*100).toInt()+
                             "% (nur Diagnose). " else "")+
+                    (if(frame.medianRgbLuma>=0)
+                        "RGB "+frame.medianRgbLuma+"/255. " else "")+
+                    (if(frame.medianRgbLuma>=0 &&
+                        !frame.rgbUsableForGeometry)
+                        "⚠ Unterbelichtet/strukturschwach. " else "")+
                     frame.gate
                 else "Offline-Rekonstruktion erneut starten."
             rgbImage.visibility=View.VISIBLE
