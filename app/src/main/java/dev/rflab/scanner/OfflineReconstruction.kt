@@ -261,8 +261,19 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 val position=if(external.isNotEmpty())
                     ExternalVioTrajectory.closestIndex(external,ts)
                     else closestIndex(poses?.poses?:emptyList(),ts)
-                val online=if(external.isNotEmpty() && position>=0)
-                    external[position].onlineCamera else null
+                // Interpolate the VIO 6DoF camera pose to the exact RGB shutter timestamp.
+                val photoPose=if(external.isNotEmpty())
+                    ExternalVioTrajectory.interpolate(external,ts) else null
+                val online=photoPose?.onlineCamera
+                    ?:if(position>=0 && external.isNotEmpty())
+                        external[position].onlineCamera else null
+                val jpegBounds=android.graphics.BitmapFactory.Options().apply{
+                    inJustDecodeBounds=true
+                }
+                android.graphics.BitmapFactory.decodeByteArray(
+                    jpeg,0,jpeg.size,jpegBounds)
+                val sourceWidth=jpegBounds.outWidth
+                val sourceHeight=jpegBounds.outHeight
                 val correctedRotation=online?.rotationCamFromImu()
                     ?:rotationMatrix
                 // Online temporal calibration relates the clocks by
@@ -297,7 +308,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     }
                 val matched=if(external.isEmpty() && position>=0)
                     poses?.poses?.getOrNull(position) else null
-                if(position>=0)paired++
+                if(photoPose!=null || (external.isEmpty() && position>=0))paired++
                 // Store a dense relative-depth map as 16-bit normalized data.
                 // 0 means invalid; min/max in metadata restore model units.
                 val good=inference.relativeDepth.asSequence()
@@ -312,7 +323,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     external.isEmpty() -> "Keine native OpenVINS-Kamerapose"
                     motionQuality?.acceptableForExperimentalGeometry!=true ->
                         "VIO-Trajektorie physikalisch unplausibel"
-                    position<0 -> "Kein synchronisierter VIO-Zeitstempel"
+                    photoPose==null -> "Keine interpolierbare VIO-Pose zum Belichtungszeitpunkt"
                     cameraCalibration==null && previewCalibration==null ->
                         "Kamera-IMU-Kalibrierung nicht hinreichend bestätigt"
                     frameCalibration==null -> "Online-Kamera-Kalibrierung fehlt"
@@ -329,7 +340,9 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 val cloudName="relative_%04d.rgbxyz".format(i)
                 var relativeCount=0
                 if(good.size>=100)try{
-                    val points=OpenVinsDa3RelativePreview.make(inference)
+                    val points=OpenVinsDa3RelativePreview.make(
+                        inference,frameCalibration ?:initialCalibration,
+                        sourceWidth,sourceHeight)
                     if(points.size>=50){
                         OpenVinsRgbCloudCache.write(folder,cloudName,points)
                         relativeCount=points.size
@@ -347,18 +360,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 // intrinsics, EVEN IF the gyro baseline cannot be certified.
                 // It is a visible, nonmetric diagnostic, NOT a stored map.
                 val approximateCamera=frameCalibration ?:initialCalibration
-                if(approximateCamera!=null && position>=0 &&
-                    external.isNotEmpty() && good.size>=100)try{
-                    val bounds=android.graphics.BitmapFactory.Options().apply{
-                        inJustDecodeBounds=true
-                    }
-                    android.graphics.BitmapFactory.decodeByteArray(
-                        jpeg,0,jpeg.size,bounds)
+                if(approximateCamera!=null && photoPose!=null &&
+                    good.size>=100)try{
                     if(approximateCamera.compatibleWith(
-                            bounds.outWidth,bounds.outHeight)){
+                            sourceWidth,sourceHeight)){
                         val rays=OpenVinsDa3Fusion.sampleUnscaled(
-                            inference,external[position],approximateCamera,
-                            bounds.outWidth,bounds.outHeight,lo,hi)
+                            inference,photoPose,approximateCamera,
+                            sourceWidth,sourceHeight,lo,hi)
                         if(rays.size>=50)
                             diagnosticWorldFrames.add(
                                 OpenVinsDa3DiagnosticWorld.Frame(
@@ -371,24 +379,18 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 }
                 // Keep sparse ORB features plus ~2k true RGB camera rays
                 // per frame. Do NOT apply an invented median depth scale.
-                // After all DA3 frames have run, fit inverse-depth scale/shift
+                // Fit DIRECT relative-depth scale/shift against actual optical Z
                 // from triangulated native VIO camera baselines.
-                if(frameCalibration!=null && external.isNotEmpty() &&
+                if(frameCalibration!=null && photoPose!=null &&
                     imageOrientation?.usableForFusion==true &&
-                    inference.cropPercent<.70f &&
-                    position>=0 && good.size>=100){
+                    inference.cropPercent<.70f && good.size>=100){
                     try {
-                        val bounds=android.graphics.BitmapFactory.Options().apply{
-                            inJustDecodeBounds=true
-                        }
-                        android.graphics.BitmapFactory.decodeByteArray(jpeg,0,
-                            jpeg.size,bounds)
                         if(frameCalibration.compatibleWith(
-                                bounds.outWidth,bounds.outHeight)){
+                                sourceWidth,sourceHeight)){
                             val frame=OpenVinsDa3MultiView.extract(i,
                                 inference.image,inference.relativeDepth,
-                                external[position],frameCalibration,
-                                bounds.outWidth,bounds.outHeight,
+                                photoPose,frameCalibration,
+                                sourceWidth,sourceHeight,
                                 inference.rotationDegrees)
                             if(frame!=null){
                                 candidateFeatures.add(frame)
@@ -397,8 +399,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                                 if(cameraCalibration!=null ||
                                     previewCalibration!=null){
                                     val rays=OpenVinsDa3Fusion.sampleUnscaled(
-                                        inference,external[position],frameCalibration,
-                                        bounds.outWidth,bounds.outHeight,lo,hi)
+                                        inference,photoPose,frameCalibration,
+                                        sourceWidth,sourceHeight,lo,hi)
                                     if(rays.isNotEmpty())candidateRays[i]=rays
                                 }
                             }
@@ -427,6 +429,13 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 manifest.put(JSONObject()
                     .put("source_photo_index",i)
                     .put("input_photo",photo.jpeg.name)
+                    .put("da3_output_kind","affine_invariant_relative_depth")
+                    .put("raw_depth_reciprocal_applied",false)
+                    .put("effective_camera_intrinsics_used_for_preview",
+                        (frameCalibration?:initialCalibration)?.compatibleWith(
+                            sourceWidth,sourceHeight)?:false)
+                    .put("pose_interpolated_to_shutter_timestamp",
+                        photoPose!=null)
                     .put("relative_rgb_cloud_file",
                         if(relativeCount>0)cloudName else JSONObject.NULL)
                     .put("relative_rgb_cloud_points",relativeCount)
@@ -477,9 +486,8 @@ internal class OfflineReconstruction(private val context:android.content.Context
                         "OpenVINS native MSCKF, unvalidated"
                         else "OpenCV relative monocular VO")
                     .put("external_camera_position_unvalidated",
-                        if(external.isNotEmpty() && position>=0)
-                            JSONArray(external[position].center().toList())
-                        else JSONObject.NULL)
+                        photoPose?.let{JSONArray(it.center().toList())}
+                            ?:JSONObject.NULL)
                     .put("pose_metric",false))
                 last?.recycle()
                 last=inference.depthVisual.copy(
@@ -544,14 +552,14 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("matched_triangular_correspondences",fit.observations)
                 .put("inliers",fit.inliers)
                 .put("median_relative_error",fit.medianRelativeError)
-                .put("inverse_depth_scale_vio",fit.scale)
-                .put("inverse_depth_shift_vio",fit.shift)
+                .put("relative_depth_scale_vio",fit.scale)
+                .put("relative_depth_shift_vio",fit.shift)
                 .put("coverage_quadrants",fit.coverageQuadrants)
                 .put("aligned_3d_points",fused.size))
             for(manifestIdx in 0 until manifest.length()){
                 val entry=manifest.optJSONObject(manifestIdx) ?: continue
                 if(entry.optInt("source_photo_index",-1)==index)
-                    entry.put("inverse_depth_alignment",JSONObject()
+                    entry.put("direct_relative_depth_alignment",JSONObject()
                         .put("scale",fit.scale).put("shift",fit.shift)
                         .put("inliers",fit.inliers)
                         .put("median_relative_error",fit.medianRelativeError))
@@ -570,7 +578,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 update("3/3 · Verifizierte OpenVINS/DA3-Punkte fusionieren …")
                 val output=RoomScanStore(context,"rflab_openvins_scan_v1.json")
                 output.start("OpenVINS + DA3 " + suffix)
-                output.poseSource="OpenVINS native MSCKF + DA3 aligned inverse "+
+                output.poseSource="OpenVINS native MSCKF + DA3 aligned relative "+
                     "depth from real triangulated RGB correspondence; "+
                     "camera calibration/metric accuracy UNVALIDATED"
                 val stride=(external.size/1200).coerceAtLeast(1)
@@ -641,7 +649,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                     previewCalibration!=null)
                 .put("namespace","rflab_openvins_scan_v1.json")
                 .put("method","reciprocal ORB, native VIO ray triangulation, "+
-                    "robust affine inverse-depth scale/shift, RGB voxel fusion")
+                    "robust direct relative-depth scale/shift, RGB voxel fusion")
                 .put("selected_da3_rgb_frames",selected.size)
                 .put("rgb_frames_with_associated_vio_pose",paired)
                 .put("registered_keyframes",alignedFrames)
@@ -650,7 +658,7 @@ internal class OfflineReconstruction(private val context:android.content.Context
                 .put("triangulated_correspondences",triangulatedFeatures)
                 .put("pairs_considered",pairCandidates)
                 .put("aligned_keyframe_diagnostics",quality)
-                .put("depth_kind","affine-invariant inverse depth")
+                .put("depth_kind","affine-invariant relative depth; direct affine scale+shift")
                 .put("multiview_scale_shift_aligned",alignedFrames>=2)
                 .put("native_pose_calibration_verified",false)
                 .put("camera_geometry_capture_result_gate_passed",
