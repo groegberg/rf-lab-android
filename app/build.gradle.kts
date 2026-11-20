@@ -22,8 +22,8 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 26
-        versionName = listOfNotNull("1.3.10-qa.1", revisionLabel).joinToString("+")
+        versionCode = 27
+        versionName = listOfNotNull("1.3.11-qa.1", revisionLabel).joinToString("+")
         manifestPlaceholders["rfLabLabel"] = "RF Lab"
         // Pixel 10 Pro XL: bundle only 64-bit ARM native OpenCV/LiteRT.
         ndk { abiFilters += "arm64-v8a" }
@@ -31,8 +31,8 @@ android {
     buildTypes {
         getByName("debug") {
             if (trackingTest) {
-                applicationIdSuffix = ".trackingtest"
-                manifestPlaceholders["rfLabLabel"] = "RF Lab Tracking"
+                applicationIdSuffix = ".trackingsync"
+                manifestPlaceholders["rfLabLabel"] = "RF Lab VIO Sync"
             } else if (parallelPixelTest) {
                 applicationIdSuffix = ".pixeltest"
                 manifestPlaceholders["rfLabLabel"] = "RF Lab Test"

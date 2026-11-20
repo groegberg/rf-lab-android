@@ -27,13 +27,17 @@ def write(path: pathlib.Path, content: str) -> None:
 def apply_tracking_updates() -> None:
     patches = PROJECT / "research" / "openvins"
     core = SOURCE / "app" / "src" / "main" / "cpp" / "open_vins"
-    for checkout, name in ((core, "static-start.patch"), (SOURCE, "camera-pose.patch")):
+    for checkout, name in ((core, "static-start.patch"), (SOURCE, "camera-pose.patch"),
+                           (SOURCE, "sensor-stream.patch")):
         patch = str(patches / name)
         # Both a freshly pinned checkout and a previously prepared build are supported.
         if subprocess.run(["git", "apply", "--reverse", "--check", patch],
                           cwd=checkout, capture_output=True).returncode:
             run("git", "apply", "--check", patch, cwd=checkout)
             run("git", "apply", patch, cwd=checkout)
+    java_dir = SOURCE / "app/src/main/java/com/openvins/android"
+    for name in ("ImuSynchronizer.java", "TrackingSensors.java"):
+        shutil.copyfile(patches / "sensors" / name, java_dir / name)
     header = patches / "steady_gyro.h"
     installed = core / "ov_init" / "src" / "static" / header.name
     if not installed.exists() or installed.read_bytes() != header.read_bytes():
