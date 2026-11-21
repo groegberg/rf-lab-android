@@ -85,6 +85,10 @@ internal object VioMotionQuality {
         val live = LiveVioMotion()
         if (reasons.isEmpty() && poses.any { live.observe(it.timestampNs, it.x, it.y, it.z) == LiveVioMotion.Result.REJECT })
             reasons += "Abschnitt mit anhaltend unplausibler VIO-Bewegung"
+        val support = VioSupportGap()
+        if (poses.any { support.observe(it.timestampNs, it.x, it.y, it.z, it.visualCountersBothZero) }) {
+            reasons += "Die Position wandert über mehrere Sekunden ohne MSCKF-Merkmalsbahnen und ohne SLAM-Landmarken."
+        }
         return Report(reasons.isEmpty(),duration,path,displacement,median,
             p90,maximum,poses.size,reasons)
     }

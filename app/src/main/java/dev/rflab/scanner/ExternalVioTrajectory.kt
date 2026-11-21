@@ -51,7 +51,8 @@ internal object ExternalVioTrajectory {
         val timestampNs: Long,
         val x: Double, val y: Double, val z: Double,
         val qw: Double, val qx: Double, val qy: Double, val qz: Double,
-        val onlineCamera:CameraEstimate?=null
+        val onlineCamera:CameraEstimate?=null,
+        val visualCountersBothZero:Boolean=false
     ) {
         fun center() = doubleArrayOf(x,y,z)
     }
@@ -59,7 +60,12 @@ internal object ExternalVioTrajectory {
     fun parse(lines: Sequence<String>, maxSamples: Int = 24_000): List<Sample> {
         val result=ArrayList<Sample>()
         var previous=0L
-        for (line in lines.drop(1)) {
+        val rows = lines.iterator()
+        if (!rows.hasNext()) return result
+        val header = rows.next().trim().split(',')
+        val msckf = header.indexOf("msckf_tracks_kept")
+        val slam = header.indexOf("slam_landmarks_in_state")
+        for (line in rows) {
             val p=line.trim().split(',')
             if(p.size<8 || result.size>=maxSamples)continue
             val t=p[0].toLongOrNull()?:continue
@@ -90,7 +96,8 @@ internal object ExternalVioTrajectory {
                 else null
             } else null
             result.add(Sample(t,nums[0],nums[1],nums[2],
-                nums[3],nums[4],nums[5],nums[6],calibrated))
+                nums[3],nums[4],nums[5],nums[6],calibrated,
+                p.getOrNull(msckf)?.trim() == "0" && p.getOrNull(slam)?.trim() == "0"))
             previous=t
         }
         return result
