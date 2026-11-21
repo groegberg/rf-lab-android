@@ -9,3 +9,10 @@ app/build/
 # AI model is downloaded and SHA-256 verified at Android build time.
 app/src/main/assets/*.tflite
 app/src/main/assets/*.tflite.part
+
+# Reproducibly fetched GPLv3 source + generated license copy
+third_party/openvins_mobile/
+app/src/main/assets/licenses/openvins-gplv3.txt
+
+# Temporary, SHA-verified Boost 1.72 cross-build intermediates
+third_party/boost-1.72-build/

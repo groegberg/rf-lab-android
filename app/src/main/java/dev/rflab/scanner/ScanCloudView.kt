@@ -78,7 +78,9 @@ class ScanCloudView(context: Context) : View(context) {
         paint.style = Paint.Style.FILL
         if (bounds == null) {
             paint.color = Color.rgb(185, 215, 233)
-            canvas.drawText("Noch keine optischen Tiefenpunkte",
+            canvas.drawText(if (scan.poseSource.startsWith("OpenVINS"))
+                "Warte auf initialisierte native VIO-Pose"
+                else "Noch keine optischen Tiefenpunkte",
                 15f * density, height / 2f, paint)
             return
         }
@@ -112,6 +114,12 @@ class ScanCloudView(context: Context) : View(context) {
                 canvas.drawPath(path, paint)
                 paint.style = Paint.Style.FILL
             }
+            trajectory.lastOrNull()?.let { pos ->
+                paint.style = Paint.Style.FILL
+                paint.color = Color.rgb(255, 194, 92)
+                canvas.drawCircle(sx(pos.x + scan.originX),
+                    sy(pos.z + scan.originZ), 5f * density, paint)
+            }
             rooms.forEach { room ->
                 val r = RectF(sx(room.x), sy(room.z),
                     sx(room.x + room.width), sy(room.z + room.depth))
@@ -140,7 +148,12 @@ class ScanCloudView(context: Context) : View(context) {
         val cx = (bounds.minX + bounds.maxX) * .5f
         val cy = (bounds.minY + bounds.maxY) * .5f
         val cz = (bounds.minZ + bounds.maxZ) * .5f
-        val spread = max(2f, max(bounds.width, max(bounds.depth, bounds.height)))
+        // A short native VIO path (e.g. 30cm) was nearly invisible at
+        // the old hardcoded minimum 2m scale. Auto-fit real poses when
+        // there are no accepted depth points; never fake a cloud.
+        val size=max(bounds.width,max(bounds.depth,bounds.height))
+        val spread=if(points.isEmpty())max(.25f,size*1.2f)
+            else max(2f,size)
         val scale = min(width, height) / (spread * 1.85f) * zoom
         val co = cos(yaw)
         val si = sin(yaw)
@@ -189,11 +202,26 @@ class ScanCloudView(context: Context) : View(context) {
             }
             canvas.drawPath(path, paint)
         }
+        trajectory.lastOrNull()?.let { pos ->
+            val p = project(pos.x, pos.y, pos.z)
+            paint.style = Paint.Style.FILL
+            paint.color = Color.rgb(255, 194, 92)
+            canvas.drawCircle(p.first, p.second, 5f * density, paint)
+        }
         paint.style = Paint.Style.FILL
         paint.color = Color.rgb(184, 211, 228)
-        canvas.drawText(if (showCameraColors) "3D · Kamerafarben/Höhe · Türkis = Kamerapfad"
-            else "3D · Farbe = Höhe · Türkis = Kamerapfad",
-            9f * density, height - 10f * density, paint)
+        canvas.drawText(when {
+            scan.poseSource.startsWith("DA3 RELATIVE SINGLE-VIEW") ->
+                "DA3-RGB-Tiefenrelief · EIN Foto · KEIN metrischer Maßstab"
+            scan.poseSource.startsWith("OpenVINS DA3 MULTIVIEW RESEARCH") ->
+                "OpenVINS+DA3 Farbkarte · DIAGNOSE · unkalibriert"
+            scan.poseSource.startsWith("OpenVINS sparse diagnostic") ->
+                "DIAGNOSE: triangulierte RGB-Merkmale · NICHT metrisch kalibriert"
+            scan.poseSource.startsWith("OpenVINS") && points.isEmpty() ->
+                "Native VIO · Türkis = Pfad · Orange = letzte Pose · noch keine Tiefe"
+            showCameraColors -> "3D · Kamerafarben/Höhe · Türkis = Kamerapfad"
+            else -> "3D · Farbe = Höhe · Türkis = Kamerapfad"
+        }, 9f * density, height - 10f * density, paint)
     }
 
     private fun falseColor(height: Float, confidence: Float): Int {

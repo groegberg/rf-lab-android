@@ -24,8 +24,15 @@ data class ScanBounds(val minX: Float, val maxX: Float, val minY: Float, val max
  * Experimental metric RGB-D voxel cloud, not a watertight mesh or LiDAR.
  * Raw measurements take priority over interpolated Full Depth.
  */
-class RoomScanStore(private val context: Context) {
-    private val path = File(context.filesDir, "rflab_room_scan_v1.json")
+class RoomScanStore(private val context: Context,
+                    private val fileName: String = "rflab_room_scan_v1.json") {
+    init {
+        require(fileName == "rflab_room_scan_v1.json" ||
+                fileName == "rflab_openvins_scan_v1.json") {
+            "Unrecognized room-scan storage namespace"
+        }
+    }
+    private val path = File(context.filesDir, fileName)
     private val cells = HashMap<Long, Int>()
     private val cloud = mutableListOf<ScanPoint>()
     private val track = mutableListOf<ScanTrack>()
@@ -41,6 +48,7 @@ class RoomScanStore(private val context: Context) {
         private set
     var sampleFrames = 0
         private set
+    var poseSource = "ARCore raw optical depth + visual-inertial poses"
 
     init { load() }
 
@@ -50,6 +58,7 @@ class RoomScanStore(private val context: Context) {
         originX = 0f; originZ = 0f
         sampleFrames = 0
         complete = false
+        poseSource = "ARCore raw optical depth + visual-inertial poses"
         label = name
     }
 
@@ -111,7 +120,14 @@ class RoomScanStore(private val context: Context) {
     @Synchronized fun hasScan() = complete && cloud.size >= 50
 
     @Synchronized fun bounds(): ScanBounds? {
-        if (cloud.isEmpty()) return null
+        // OpenVINS supplies real native camera positions before offline DA3
+        // supplies depth. Render the path without inventing 3D surfaces.
+        if (cloud.isEmpty()) {
+            if (track.isEmpty()) return null
+            return ScanBounds(track.minOf { it.x }, track.maxOf { it.x },
+                track.minOf { it.y }, track.maxOf { it.y },
+                track.minOf { it.z }, track.maxOf { it.z })
+        }
         return ScanBounds(cloud.minOf { it.x }, cloud.maxOf { it.x },
             cloud.minOf { it.y }, cloud.maxOf { it.y },
             cloud.minOf { it.z }, cloud.maxOf { it.z })
@@ -126,7 +142,7 @@ class RoomScanStore(private val context: Context) {
             .put("origin_z", originZ.toDouble())
             .put("completed", complete)
             .put("sample_frames", sampleFrames)
-            .put("source", "ARCore raw optical depth + visual-inertial poses")
+            .put("source", poseSource)
             .put("rgb_textured", false)
             .put("rgb_colored_points", coloredPointCount())
             .put("fusion_voxel_m", VoxelFusion.VOXEL_M.toDouble())
@@ -154,6 +170,8 @@ class RoomScanStore(private val context: Context) {
             if (root.optString("schema") != "rflab-optical-depth-v1") return false
             cloud.clear(); track.clear(); cells.clear()
             label = root.optString("label", "Raumscan")
+            poseSource = root.optString("source",
+                "ARCore raw optical depth + visual-inertial poses")
             createdAtMs = root.optLong("created_at_ms")
             originX = root.optDouble("origin_x").toFloat()
             originZ = root.optDouble("origin_z").toFloat()

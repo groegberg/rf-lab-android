@@ -36,6 +36,7 @@ class SpatialSetupActivity : Activity() {
     private lateinit var footer: LinearLayout
     private lateinit var stepBar: LinearLayout
     private var stage = 0
+    private var trackingBackend = ScanTrackingBackend.OPENVINS
     private val titles = listOf("3D-SCAN", "RÄUME", "MESSEN", "GERÄTE", "AUTOMATION")
     private var firstCorner: Pair<Float, Float>? = null
     private val scanRequest = 611
@@ -90,13 +91,17 @@ class SpatialSetupActivity : Activity() {
         home = SpatialHomeStore(this)
         scan = RoomScanStore(this)
         stage = getPreferences(MODE_PRIVATE).getInt("setup_stage", 0).coerceIn(0, 4)
+        trackingBackend = ScanTrackingBackend.entries.firstOrNull {
+            it.name == getPreferences(MODE_PRIVATE).getString(
+                "scan_tracking_backend", ScanTrackingBackend.OPENVINS.name)
+        } ?: ScanTrackingBackend.OPENVINS
         val root = col().apply {
             setBackgroundColor(dark)
             setPadding(dp(12), dp(12), dp(12), dp(7))
         }
         setContentView(root)
         SystemBarsSafeArea.install(this, root)
-        add(root, label("RF LAB  /  SPATIAL HOME", 20f, ink, true), bottom = 3)
+        add(root, label("RF LAB  /  " + BuildConfig.VERSION_NAME, 18f, ink, true), bottom = 3)
         // Compact header: spatial map and scan get the screen, not explanations.
         val scroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -173,47 +178,71 @@ class SpatialSetupActivity : Activity() {
     }
 
     private fun launchOpenVins() {
-        try {
-            // Standalone GPLv3 research app, with its OWN Camera2 stream.
-            // No GPL code is loaded or linked into RF Lab.
-            startActivity(Intent().setClassName(
-                "com.openvins.android","com.openvins.android.MainActivity"))
-        } catch (_: android.content.ActivityNotFoundException) {
-            AlertDialog.Builder(this)
-                .setTitle("Separate VIO-Test-App erforderlich")
-                .setMessage("OpenVINS ist ein eigenständiger, GPLv3-lizenzierter " +
-                    "Android-Forschungsprototyp. Bitte erst die OpenVINS-APK " +
-                    "installieren. Danach kannst du hier das Live-Tracking " +
-                    "starten und den Datensatz über die Galerie in RF Lab " +
-                    "importieren. Die Kamera-/IMU-Kalibrierung ist noch " +
-                    "nicht für dein Pixel validiert.")
-                .setNegativeButton("Abbrechen",null)
-                .setPositiveButton("Download öffnen") { _, _ ->
-                    startActivity(Intent(Intent.ACTION_VIEW,
-                        android.net.Uri.parse(
-                            "https://github.com/groegberg/rf-lab-android/" +
-                            "releases")))
-                }.show()
+        // The native engine drives RF Lab's live trajectory/map and owns one
+        // synchronized Camera2+IMU recording; never start a parallel ARCore camera.
+        startActivityForResult(Intent(this, OpenVinsScanActivity::class.java),
+            scanRequest)
+    }
+
+    private fun startSelectedTracking() {
+        when(trackingBackend) {
+            ScanTrackingBackend.OPENVINS -> launchOpenVins()
+            ScanTrackingBackend.ARCORE ->
+                startActivityForResult(Intent(this, SpatialScanActivity::class.java),
+                    scanRequest)
+            ScanTrackingBackend.CAMERA2 ->
+                startActivity(Intent(this, PhotoCaptureActivity::class.java))
         }
+    }
+
+    private fun selectTrackingBackend() {
+        val choices=ScanTrackingBackend.entries
+        AlertDialog.Builder(this)
+            .setTitle("Tracking für die Raumaufnahme")
+            .setSingleChoiceItems(choices.map { it.title+"\n"+it.hint }.toTypedArray(),
+                trackingBackend.ordinal) { dialog, index ->
+                trackingBackend=choices[index]
+                getPreferences(MODE_PRIVATE).edit()
+                    .putString("scan_tracking_backend",trackingBackend.name).apply()
+                dialog.dismiss()
+                render()
+            }
+            .setNegativeButton("Abbrechen",null).show()
     }
 
     private fun scanStep() {
         add(body, label("Deine Wohnung in 3D", 22f, ink, true), bottom = 8)
-        add(body, button("●  Live VIO testen · OpenVINS", true) {
-            launchOpenVins()
+        add(body, button("Tracking: "+trackingBackend.title+"  ▾") {
+            selectTrackingBackend()
+        }, bottom = 6)
+        add(body, label(trackingBackend.hint, 12.1f, muted), bottom = 7)
+        val pageSize = runCatching {
+            android.system.Os.sysconf(android.system.OsConstants._SC_PAGE_SIZE)
+        }.getOrDefault(-1L)
+        val pageLabel = if(pageSize > 0) (pageSize/1024).toString()+" KiB"
+            else "unbekannt"
+        add(body, label("Android "+android.os.Build.VERSION.RELEASE+
+            " · API "+android.os.Build.VERSION.SDK_INT+
+            " · Speicherpages "+pageLabel,11.5f,muted), bottom=8)
+        add(body, button("●  Tracking starten", true) {
+            startSelectedTracking()
         }, bottom = 8)
-        add(body, button("Fotos aufnehmen · Camera2 (bisher)") {
-            startActivity(Intent(this, PhotoCaptureActivity::class.java))
+        add(body, button("Aufnahmen / KI-Tiefe") {
+            startActivity(Intent(this, PhotoGalleryActivity::class.java))
         }, bottom = 8)
-        add(body, row(
-            button("Foto-Galerie / KI-Tiefe") {
-                startActivity(Intent(this, PhotoGalleryActivity::class.java))
-            },
-            button("ARCore-Scan (alt)") {
-                startActivityForResult(Intent(this, SpatialScanActivity::class.java),
-                    scanRequest)
-            }
-        ), bottom = 8)
+        add(body, label("OpenVINS zeigt jetzt die native Kameratrajektorie "+
+            "live neben der Kamera. Die RGB-/IMU-Aufnahmen gehen direkt zur "+
+            "Offline-Auswertung mit Depth Anything 3. "+
+            "ARCore- und VIO-Koordinaten bleiben getrennt; kein metrischer Mesh-Scan.",
+            11.5f, muted), bottom = 8)
+        val nativeTrack = RoomScanStore(this, "rflab_openvins_scan_v1.json")
+        if (nativeTrack.poseCount() > 0) {
+            add(body, label("Letzte OpenVINS-Trajektorie · " +
+                nativeTrack.poseCount() + " native Kamerapositionen",
+                13f, accent, true), bottom = 6)
+            add(body, ScanCloudView(this).apply { store = nativeTrack },
+                bottom = 9, height = dp(255))
+        }
         val frames = RgbdKeyframeArchive(this).let {
             val count = it.files().size
             it.shutdown()

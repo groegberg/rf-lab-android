@@ -1,0 +1,120 @@
+name: Publish RF Lab v1.3.5 private Pixel camera-IMU diagnostic APK
+
+on:
+  push:
+    branches: [feature/embedded-openvins-v1.3]
+    paths:
+      - .github/workflows/publish-v1.3.5-private-calibration-diagnostics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# The test release must match one immutable, fully verified source commit.
+concurrency:
+  group: rflab-v135-private-calibration-release
+  cancel-in-progress: true
+
+jobs:
+  verified-private-pixel-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK, NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;28.2.13676358" "cmake;3.18.1"
+      # Previous release runner failed before checkout because the Gradle
+      # composite action tarball timed out from codeload.github.com.
+      # Fetch the official Gradle 8.13 distribution and verify its SHA256
+      # instead, avoiding dependency on a third-party action download.
+      - name: Install verified Gradle 8.13 (no GitHub action tarball)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          mkdir -p "$RUNNER_TEMP/rflab-gradle"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 500 \
+            "$base" -o "$RUNNER_TEMP/rflab-gradle/gradle.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 120 \
+            "$base.sha256" -o "$RUNNER_TEMP/rflab-gradle/gradle.sha256"
+          (cd "$RUNNER_TEMP/rflab-gradle" && \
+            echo "$(cat gradle.sha256)  gradle.zip" | sha256sum --check)
+          unzip -q "$RUNNER_TEMP/rflab-gradle/gradle.zip" \
+            -d "$RUNNER_TEMP/rflab-gradle"
+          echo "$RUNNER_TEMP/rflab-gradle/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Prepare pinned real native GPLv3 OpenVINS and 16 KiB libraries
+        run: |
+          set -euo pipefail
+          python3 tools/bootstrap_embedded_openvins.py
+          bash tools/rebuild_boost_android_16k.sh
+      - name: Kotlin unit tests including multi-view geometry
+        run: gradle --stacktrace --no-daemon :app:testDebugUnitTest
+      - name: Validate Alexa contract
+        run: node integrations/alexa/messageFactory.test.mjs
+      - name: Assemble complete Android debug APK
+        run: gradle --stacktrace --no-daemon :app:assembleDebug
+      - name: Verify actual OpenVINS native library, dependencies and 16 KiB format
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          unzip -l "$apk" | grep 'lib/arm64-v8a/libnative-lib.so'
+          unzip -l "$apk" | grep 'lib/arm64-v8a/libopencv_java4.so'
+          unzip -l "$apk" | grep 'assets/vio_config/estimator_config.yaml'
+          python3 tools/check_android_native_dependencies.py "$apk"
+          python3 tools/check_elf_16k.py "$apk" --strict
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$apk"
+      - name: Publish PRIVATE test release directly (no Actions artifact quota)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.3.5-openvins-pixel-calibration-private-test.1
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Immutable test release tag already exists. Refusing silent replacement."
+            exit 1
+          fi
+          apk=RF-Lab-v1.3.5-OpenVINS-Camera-IMU-Pixel-PRIVATE-Test.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          digest="$(sha256sum "$apk" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$digest" "$apk" | sha256sum -c -
+          cat > release-notes.txt <<EOF
+          PRIVATE INTERNAL PIXEL 10 PRO XL TEST ONLY.
+          Native GPLv3 OpenVINS MSCKF Camera2+IMU tracking and real timestamped RGB pose session.
+          On-phone Depth Anything 3-Small LiteRT inference.
+          NEW v1.3.5: Native Camera2 YUV_420_888 stride-correct RGB conversion;
+          actual CaptureResult AF/OIS/EIS/zoom/physical-lens and time-source audit;
+          fixed focus and optical geometry for consistent RGB VIO;
+          current OpenVINS online intrinsics/extrinsics/IMU time-shift per native pose;
+          gravity-derived DA3 rotation 0/90/180/270 independent of locked UI;
+          online t_IMU=t_CAMERA+offset is applied when aligning gravity;
+          strict closed-gate against non-calibrated/unstable colored 3D geometry;
+          user-triggered Messdaten ZIP export for actual Pixel calibration.
+          IMPORTANT: This is NOT a device-certified metric camera/IMU calibration.
+          Without original per-pose online calibration and actual CaptureResults,
+          older recordings intentionally produce no misleading RGB 3D map.
+          Live Pixel validation, AprilGrid/Kalibr and known-distance tests are REQUIRED.
+          Tests/assemble/native 16 KiB/DT_NEEDED/zipalign passed in this job.
+          DO NOT distribute outside authorized private testers until combined GPLv3
+          corresponding source and third-party license obligations are reviewed.
+          Source commit: $GITHUB_SHA
+          APK SHA256: $digest
+          EOF
+          gh release create "$tag" "$apk" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "RF Lab v1.3.5 — OpenVINS camera/IMU diagnostics (PRIVATE Pixel test)" \
+            --notes-file release-notes.txt
+          echo "Private APK created from verified commit $GITHUB_SHA"

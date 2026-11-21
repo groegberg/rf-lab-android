@@ -1,0 +1,641 @@
+package dev.rflab.scanner
+
+import android.app.AlertDialog
+import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.os.Build
+import java.io.File
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.Executors
+
+/**
+ * RF Lab scan shell around the *one* original native OpenVINS Camera2/IMU
+ * activity. The native MSCKF callback is the actual pose source. No ARCore
+ * session, second camera, simulated geometry or fake tracking is introduced.
+ *
+ * Native RGB frames + IMU + timestamped VIO poses are written to sessions/
+ * and imported straight into the existing on-phone DA3 offline workflow.
+ * A live VIO camera path is stored separately from ARCore's spatial map,
+ * since these independent origins have not been registered or calibrated.
+ */
+class OpenVinsScanActivity : com.openvins.android.MainActivity() {
+    private val bgColor = Color.rgb(9, 18, 30)
+    private val accent = Color.rgb(95, 222, 209)
+    private lateinit var scan: RoomScanStore
+    private lateinit var sessionEvents: SessionStore
+    private lateinit var cloud: ScanCloudView
+    private lateinit var stateLabel: TextView
+    private lateinit var detailLabel: TextView
+    private lateinit var diagnosticLabel: TextView
+    private lateinit var startButton: Button
+    private lateinit var processButton: Button
+    private val worker = Executors.newSingleThreadExecutor()
+    private var recording = false
+    private var pendingCalibrationExport: File? = null
+    private var nativePoseSeen = false
+    private var lastUiNs = 0L
+    private var lastSavedNs = 0L
+    private var lastDiagNs = 0L
+    private var lastLightAuditNs = 0L
+    private var captureFpsSlowdown = false
+    private var maxExposureMs:Double?=null
+    private var currentHealth: VioInitializationHealth? = null
+    private var liveMotion = LiveVioMotion()
+    private val oldId = com.openvins.android.R.id.trajectory_view
+    private val healthHandler = Handler(Looper.getMainLooper())
+    // Independent UI watchdog: when the native MSCKF worker stops returning
+    // poses, there is no onNativePoseReady callback to refresh diagnostics.
+    private val healthTicker = object : Runnable {
+        override fun run() {
+            if(recording && !isFinishing && !isDestroyed)
+                refreshNativeDiagnostics(SystemClock.elapsedRealtimeNanos())
+            if(!isFinishing && !isDestroyed)
+                healthHandler.postDelayed(this,800L)
+        }
+    }
+
+    private fun dp(px: Int) = (px * resources.displayMetrics.density + .5f).toInt()
+    private fun shape(color: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(11).toFloat()
+    }
+    private fun label(s: String, sp: Float = 12f): TextView =
+        TextView(this).apply {
+            text = s
+            textSize = sp
+            setTextColor(Color.rgb(205, 229, 235))
+            gravity = Gravity.CENTER_VERTICAL
+        }
+    private fun button(s: String, primary: Boolean = false,
+                       action: () -> Unit): Button =
+        Button(this).apply {
+            text = s
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(if (primary) bgColor else Color.WHITE)
+            background = shape(if (primary) accent else Color.rgb(27, 54, 73))
+            setOnClickListener { action() }
+        }
+
+    override fun renderLegacyTrajectoryOverlay() = false
+
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+        window.statusBarColor = bgColor
+        window.navigationBarColor = bgColor
+        scan = RoomScanStore(this, "rflab_openvins_scan_v1.json")
+        sessionEvents = SessionStore(this)
+
+        // Preserve OpenVINS's live Camera2ResView and JNI camera frame stream.
+        // Reparent its EXISTING view: never open a second camera or IMU source.
+        val container = findViewById<ViewGroup>(android.R.id.content)
+        val nativeRoot = container.getChildAt(0)
+            ?: error("Native OpenVINS camera view missing")
+        container.removeView(nativeRoot)
+        nativeRoot.findViewById<View>(oldId)?.visibility = View.GONE
+        nativeRoot.findViewById<View>(com.openvins.android.R.id.vio_health_status)?.visibility = View.GONE
+        for (id in listOf(com.openvins.android.R.id.toggle_reset,
+                com.openvins.android.R.id.toggle_record,
+                com.openvins.android.R.id.open_folder)) {
+            nativeRoot.findViewById<View>(id)?.visibility = View.GONE
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bgColor)
+            setPadding(dp(8), dp(5), dp(8), dp(7))
+        }
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        toolbar.addView(label("RF LAB  /  OPENVINS  /  LIVE", 16f).apply {
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        toolbar.addView(button("Fertig") { stopAndExit() },
+            LinearLayout.LayoutParams(dp(88), dp(46)))
+        root.addView(toolbar)
+
+        val horizontal = resources.configuration.orientation ==
+            Configuration.ORIENTATION_LANDSCAPE
+        val viewport = LinearLayout(this).apply {
+            orientation = if (horizontal) LinearLayout.HORIZONTAL
+                else LinearLayout.VERTICAL
+        }
+        root.addView(viewport, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val videoParams = if (horizontal)
+            LinearLayout.LayoutParams(0, -1, .56f) else
+            LinearLayout.LayoutParams(-1, 0, .56f)
+        viewport.addView(nativeRoot, videoParams)
+
+        val mapPane = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(13, 28, 43))
+        }
+        val mapParams = if (horizontal)
+            LinearLayout.LayoutParams(0, -1, .44f) else
+            LinearLayout.LayoutParams(-1, 0, .44f)
+        viewport.addView(mapPane, mapParams)
+        cloud = ScanCloudView(this).apply { store = scan }
+        mapPane.addView(cloud, FrameLayout.LayoutParams(-1, -1))
+        mapPane.addView(label("3D · OPENVINS-KAMERAPFAD", 11f).apply {
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = shape(Color.argb(229, 14, 34, 48))
+        }, FrameLayout.LayoutParams(-2, dp(34),
+            Gravity.TOP or Gravity.START).apply {
+            topMargin = dp(9)
+            leftMargin = dp(9)
+        })
+
+        stateLabel = label("○ Bereit – Tracking noch nicht gestartet", 13f).apply {
+            setTextColor(accent)
+            setPadding(dp(7), dp(5), dp(7), 0)
+        }
+        detailLabel = label(
+            "Native VIO-Positionen · Kamerabilder und IMU werden lokal aufgenommen. " +
+            "Keine ARCore-Registrierung.", 11f).apply {
+            maxLines = 2
+            setPadding(dp(7), 0, dp(7), dp(5))
+        }
+        diagnosticLabel = label("Native Diagnose: noch keine Messdaten", 10.7f).apply {
+            setTextColor(Color.rgb(171, 205, 221))
+            setPadding(dp(7), 0, dp(7), dp(6))
+            maxLines = 3
+        }
+        root.addView(stateLabel)
+        root.addView(detailLabel)
+        root.addView(diagnosticLabel)
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        startButton = button("● Scan starten", true) {
+            if (recording) stopCapture() else requestStart()
+        }
+        controls.addView(startButton,
+            LinearLayout.LayoutParams(0, dp(50), 1.0f).apply {
+                rightMargin = dp(6)
+            })
+        processButton = button("KI-Tiefe / Auswertung") {
+            importAndAnalyze()
+        }
+        controls.addView(processButton,
+            LinearLayout.LayoutParams(0, dp(50), 1.25f))
+        root.addView(controls)
+        val diagnosticControls=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+        }
+        diagnosticControls.addView(button("Diagnose"){showDiagnostics()},
+            LinearLayout.LayoutParams(0,dp(39),1f).apply{
+                rightMargin=dp(5)
+            })
+        diagnosticControls.addView(
+            button("Messdaten ZIP"){requestCalibrationExport()},
+            LinearLayout.LayoutParams(0,dp(39),1f))
+        root.addView(diagnosticControls,
+            LinearLayout.LayoutParams(-1,dp(39)).apply{topMargin=dp(5)})
+
+        setContentView(root)
+        SystemBarsSafeArea.install(this, root)
+        if (scan.poseCount() > 0) {
+            stateLabel.text = "Letzte VIO-Vorschau (ungeprüft) · " +
+                scan.poseCount() + " Positionen"
+            detailLabel.text = "Getrennte OpenVINS-Karte · Kein ARCore-Mischscan. " +
+                "Für einen neuen Scan werden nur diese VIO-Positionen ersetzt."
+        }
+    }
+
+    private fun requestStart() {
+        if (recording) return
+        if (scan.poseCount() > 0) {
+            AlertDialog.Builder(this)
+                .setTitle("Neuen OpenVINS-Scan aufnehmen?")
+                .setMessage("Die gespeicherte OpenVINS-Trajektorie wird ersetzt. " +
+                    "Native Aufnahmeserien und deine ARCore-Raumkarte bleiben erhalten. " +
+                    "Unterschiedliche VIO-Ursprünge dürfen nicht vermischt werden.")
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Neuen Scan starten") { _, _ -> startCapture() }
+                .show()
+        } else startCapture()
+    }
+
+    private fun startCapture() {
+        if (recording) return
+        val name = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMAN).format(Date())
+        scan.start("OpenVINS MSCKF " + name)
+        scan.poseSource = "OpenVINS native MSCKF; own Z-up VIO frame; " +
+            "mapped to Y-up for preview; NOT calibrated/registered to ARCore"
+        nativePoseSeen = false
+        liveMotion = LiveVioMotion()
+        lastUiNs = 0L
+        lastSavedNs = 0L
+        lastDiagNs = 0L
+        currentHealth = null
+        diagnosticLabel.text = "IMU-Ruhephase erfassen · 3–5 Sekunden ruhig halten"
+        try {
+            if (!startEmbeddedScan()) {
+                stateLabel.text = "OpenVINS nicht startbereit – Kamera/Ordner prüfen"
+                return
+            }
+            recording = true
+            sessionEvents.start()
+            sessionEvents.write("spatial_optical_scan", JSONObject()
+                .put("format", "OpenVINS native MSCKF RGB+IMU+poses")
+                .put("backend", "OpenVINS")
+                .put("coordinate_frame", "one separate native Z-up session")
+                .put("metric_calibration_validated", false)
+                .put("arcore_frame_registered", false))
+            startButton.text = "■ Scan stoppen"
+            stateLabel.text = "○ Initialisierung · Smartphone ruhig ablegen"
+            detailLabel.text = "Kamera auf ein strukturiertes Motiv richten. Erst bei der ersten VIO-Pose " +
+                "langsam seitwärts bewegen."
+            cloud.invalidate()
+        } catch (t: Throwable) {
+            stateLabel.text = "OpenVINS-Start fehlgeschlagen: " +
+                (t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    override fun onNativePoseReady(timestampNs: Long, position: DoubleArray, quaternion: DoubleArray) {
+        if (!recording || liveMotion.rejected) return
+        nativePoseSeen = true
+        when (liveMotion.observe(timestampNs, position[0], position[1], position[2])) {
+            LiveVioMotion.Result.REPEAT -> return
+            LiveVioMotion.Result.REJECT -> {
+                stateLabel.text = "⚠ VIO-Pfad verworfen"
+                detailLabel.text = "Unplausible Bewegung. RGB und IMU werden weiter aufgezeichnet."
+                sessionEvents.write("vio_motion_rejected", JSONObject().put("camera_timestamp_ns", timestampNs))
+                scan.save()
+                return
+            }
+            LiveVioMotion.Result.ACCEPT -> Unit
+        }
+        val mapped = OpenVinsPoseTransform.toMap(position) ?: return
+        if (!OpenVinsPoseTransform.validQuaternion(quaternion)) return
+        scan.addPose(JSONObject().put("state", "TRACKING")
+            .put("position_m", JSONArray()
+                .put(mapped[0].toDouble())
+                .put(mapped[1].toDouble())
+                .put(mapped[2].toDouble())))
+        cloud.invalidate()
+        val now = SystemClock.elapsedRealtimeNanos()
+        refreshNativeDiagnostics(now)
+        if (now - lastUiNs > 250_000_000L) {
+            lastUiNs = now
+            sessionEvents.write("vio_camera_pose", JSONObject()
+                .put("state", "TRACKING")
+                .put("position_y_up_unvalidated", JSONArray()
+                    .put(mapped[0].toDouble())
+                    .put(mapped[1].toDouble())
+                    .put(mapped[2].toDouble()))
+                .put("quaternion_native_wxyz", JSONArray()
+                    .put(quaternion[0]).put(quaternion[1])
+                    .put(quaternion[2]).put(quaternion[3]))
+                .put("camera_timestamp_ns", timestampNs)
+                .put("timestamp_type", "OpenVINS camera hardware nanoseconds"))
+            stateLabel.text = "● Native VIO-Pose · " +
+                scan.poseCount() + " Kamerapunkte"
+            detailLabel.text = String.format(Locale.GERMANY,
+                "X %.2f  Y %.2f  Z %.2f (unkalibriert) · q(wxyz) %.2f / %.2f / %.2f / %.2f",
+                mapped[0], mapped[1], mapped[2],
+                quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+        }
+        // Persist periodically so an interrupted scan does not lose all poses.
+        if (now - lastSavedNs > 5_000_000_000L) {
+            lastSavedNs = now
+            scan.save()
+        }
+    }
+
+    override fun onNativePoseUnavailable() {
+        if (!recording) return
+        refreshNativeDiagnostics(SystemClock.elapsedRealtimeNanos())
+    }
+
+    private fun refreshNativeDiagnostics(nowNs: Long) {
+        if (!recording || !::diagnosticLabel.isInitialized) return
+        if (nowNs - lastDiagNs < 600_000_000L) return
+        lastDiagNs = nowNs
+        try {
+            val (counters, clocks) = readNativeDiagnostics()
+            val health = VioInitializationHealth.read(counters, clocks)
+            currentHealth = health
+            // The capture callback reports REAL exposure/frame duration,
+            // not just requested fps. Read only every ~2s to avoid IO in
+            // the VIO frame callback and show a useful low-light warning.
+            if(nowNs-lastLightAuditNs>2_000_000_000L){
+                lastLightAuditNs=nowNs
+                val evidence=getExternalFilesDir(null)?.let{
+                    File(it,"config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+                }
+                if(evidence?.isFile==true && evidence.length()<20_000L){
+                    val kv=evidence.readLines().mapNotNull{line->
+                        val sep=line.indexOf('=')
+                        if(sep>0)line.substring(0,sep) to
+                            line.substring(sep+1) else null
+                    }.toMap()
+                    captureFpsSlowdown=kv[
+                        "possible_low_light_frame_rate_slowdown"]=="true"
+                    maxExposureMs=kv["max_actual_exposure_ms"]
+                        ?.toDoubleOrNull()?.takeIf{it.isFinite()}
+                }
+            }
+            diagnosticLabel.text=health.compact()+
+                (if(captureFpsSlowdown)
+                    "\n⚠ Kamera <20 Hz in vielen Frames; "+
+                    "mehr Raumlicht, langsam bewegen. Max Belichtung "+
+                    (maxExposureMs?.toInt()?.toString()?:"?")+" ms."
+                else "")
+            // Native initialized=true is a latched state, not a live pose
+            // quality signal. Surface processing stalls while recording.
+            if (liveMotion.rejected) return
+            if(health.initialized && health.processedAgeMs!=null &&
+                health.processedAgeMs!!>1800.0) {
+                stateLabel.text="⚠ "+health.issue
+                detailLabel.text="Letzter VIO-Frame veraltet. "+
+                    "Aufnahme nicht für DA3-Mehrbildfusion geeignet; "+
+                    "Kamera/IMU-Neustart oder neue Aufnahme erforderlich."
+            }else if (!health.initialized) {
+                stateLabel.text = "○ " + health.issue
+                if (health.rawCamera >= 10 && health.fedImu >= 100 &&
+                    health.processedCamera >= 10 &&
+                    health.expiredCamera <= health.processedCamera) {
+                    detailLabel.text = "VIO hat Eingabedaten: " +
+                        "Handy mit freier Kamera ruhig ablegen und bis zur ersten VIO-Pose warten."
+                }
+            }
+        } catch (error: Throwable) {
+            diagnosticLabel.text = "Native Diagnose nicht lesbar: " +
+                (error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    /** Native captures copy the YAML at session start. Add the Camera2
+     *  capture-result evidence AFTER recording stops, so a lens switch or
+     *  optical/focus drift late in the scan is never silently forgotten.
+     *  This file is diagnostic only; it cannot prove Kalibr accuracy.
+     */
+    private fun snapshotCameraAudit() {
+        val root=getExternalFilesDir(null) ?: return
+        val original=File(root,"config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+        if(!original.isFile || original.length() !in 40..128_000)return
+        val native=File(root,"sessions").listFiles()
+            ?.filter{it.isDirectory &&
+                File(it,"vio_camera_trajectory.csv").isFile}
+            ?.maxByOrNull{File(it,"vio_camera_trajectory.csv").lastModified()}
+            ?:return
+        val config=File(native,"config").apply{mkdirs()}
+        original.copyTo(File(config,"PIXEL_CAMERA_CAPTURE_EVIDENCE.txt"),
+            overwrite=true)
+    }
+
+    private fun cameraDiagnostics(): String = try {
+        val manager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraId = manager.cameraIdList.firstOrNull {
+            manager.getCameraCharacteristics(it)
+                .get(CameraCharacteristics.LENS_FACING) ==
+                CameraCharacteristics.LENS_FACING_BACK
+        }
+        val props = cameraId?.let { manager.getCameraCharacteristics(it) }
+        val clock = props?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+        val clockText = when (clock) {
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME ->
+                "Camera2 boot-time/realtime"
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN ->
+                "Camera2 timestamp source UNKNOWN"
+            else -> "Camera2 timestamp source unavailable"
+        }
+        val intrinsic = props?.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+        val calibration = File(getExternalFilesDir(null),
+            "config/PIXEL_CALIBRATION_WARNING.txt")
+        "Android " + Build.VERSION.RELEASE + " / API " +
+            Build.VERSION.SDK_INT + " / " + Build.MODEL + "\n" +
+            "Camera2 id=" + (cameraId ?: "unknown") + " · " + clockText +
+            " · intrinsic_available=" + (intrinsic != null) + "\n" +
+            "Camera2 calibration seed file=" + calibration.exists() + "\n" +
+            (if(calibration.isFile)calibration.readText().take(750) else
+                "No Camera2 calibration seed found: old/unvalidated config may be in use")+
+            "\nCamera2 CaptureResult audit:\n"+
+            (File(getExternalFilesDir(null),
+                "config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+                .takeIf{it.isFile}?.readText()?.take(1400)
+                ?: "Keine tatsächlichen Camera2-CaptureResult-Daten vorhanden")
+    } catch (e: Exception) {
+        "Camera2 metadata unavailable: " + (e.message ?: "unknown")
+    }
+
+    private fun diagnosticReport(): String {
+        val current = try {
+            val (counts, times) = readNativeDiagnostics()
+            VioInitializationHealth.read(counts, times)
+        } catch (_: Throwable) { currentHealth }
+        return (current?.report(recording) ?:
+            "Native diagnostics unavailable") +
+            "\nRF Lab live VIO poses=" + scan.poseCount() +
+            "\nRF Lab nativePoseSeen=" + nativePoseSeen +
+            "\nRF Lab liveMotionRejected=" + liveMotion.rejected +
+            "\n" + cameraDiagnostics()
+    }
+
+    private fun showDiagnostics() {
+        val body = diagnosticReport()
+        AlertDialog.Builder(this)
+            .setTitle("OpenVINS · echte Initialisierungsdiagnose")
+            .setMessage(body)
+            .setNegativeButton("Schließen", null)
+            .setPositiveButton("Text kopieren") { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE)
+                    as ClipboardManager
+                clipboard.setPrimaryClip(
+                    ClipData.newPlainText("RF Lab OpenVINS diagnostics", body))
+                Toast.makeText(this, "Diagnose kopiert", Toast.LENGTH_SHORT).show()
+            }.show()
+    }
+
+    private fun requestCalibrationExport() {
+        if(recording)stopCapture()
+        if(recording)return
+        val root=File(getExternalFilesDir(null),"sessions")
+        val latest=OpenVinsCalibrationArchive.latest(root)
+        if(latest==null){
+            Toast.makeText(this,"Keine native OpenVINS-Aufnahme vorhanden",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        pendingCalibrationExport=latest
+        val intent=Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/zip")
+            .putExtra(Intent.EXTRA_TITLE,"RF-Lab-OpenVINS-Kalibrierung-"+
+                latest.name+".zip")
+        startActivityForResult(intent,7032)
+    }
+
+    @Deprecated("SAF document picker callback for a user-selected export")
+    override fun onActivityResult(
+        requestCode:Int,resultCode:Int,data:Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode!=7032)return
+        val session=pendingCalibrationExport
+        pendingCalibrationExport=null
+        if(resultCode!=RESULT_OK || session==null)return
+        val uri=data?.data?:return
+        // The selected completed native session may have been recorded
+        // with a different preview size than the current Camera2 view.
+        // In the supplied ZIP the recording was 640x480, while the old
+        // ad-hoc live report incorrectly showed a reopened 640x360 view.
+        val cameraCapture=File(session,
+            "config/PIXEL_CAMERA_CAPTURE_EVIDENCE.txt")
+        val cameraSeed=File(session,
+            "config/PIXEL_CALIBRATION_WARNING.txt")
+        val report=buildString {
+            appendLine("RF Lab – native OpenVINS session evidence")
+            appendLine("session="+session.name)
+            appendLine("Camera2 CaptureResult AS RECORDED:")
+            appendLine(if(cameraCapture.isFile)cameraCapture.readText()
+                else "Not recorded for this session")
+            appendLine("Camera2 geometry seed AS RECORDED:")
+            appendLine(if(cameraSeed.isFile)cameraSeed.readText()
+                else "Not recorded for this session")
+            appendLine("Online per-frame intrinsics, extrinsics and IMU "+
+                "offsets: vio_camera_trajectory.csv")
+            appendLine("No independently validated metric camera-IMU calibration")
+        }
+        stateLabel.text="Messdaten werden als ZIP exportiert …"
+        worker.execute {
+            try {
+                val result=contentResolver.openOutputStream(uri)?.use { stream ->
+                    OpenVinsCalibrationArchive.export(session,stream,report)
+                } ?:error("Kein Zielspeicher für Messdaten")
+                runOnUiThread {
+                    if(!isFinishing && !isDestroyed){
+                        stateLabel.text="✓ OpenVINS-Messdaten exportiert: "+
+                            result.files+" Dateien"
+                        Toast.makeText(this,"IMU/Kamera/Kalibrierung ZIP gespeichert",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch(t:Throwable) {
+                runOnUiThread {
+                    if(!isFinishing && !isDestroyed){
+                        stateLabel.text="Kalibrierungs-Export fehlgeschlagen: "+
+                            (t.message?:t.javaClass.simpleName)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopCapture() {
+        if (!recording) return
+        // Close IMU/RGB/pose CSV writers BEFORE shutting down MSCKF.
+        recording = false
+        try {
+            stopEmbeddedScan()
+            snapshotCameraAudit()
+            scan.save()
+            // Retain the actual native queue/IMU counters even when no pose
+            // was initialized. No Logcat/ADB access is needed to investigate.
+            val report = diagnosticReport()
+            File(filesDir, "rflab_openvins_last_diagnostics.txt")
+                .writeText(report)
+            sessionEvents.write("vio_diagnostic", JSONObject()
+                .put("text", report))
+            sessionEvents.write("spatial_optical_scan_end", JSONObject()
+                .put("backend", "OpenVINS")
+                .put("native_camera_poses", scan.poseCount())
+                .put("native_pose_initialized", nativePoseSeen)
+                .put("live_motion_rejected", liveMotion.rejected))
+            sessionEvents.stop()
+            startButton.text = "● Neuer Scan"
+            stateLabel.text = if (liveMotion.rejected)
+                "⚠ RGB und IMU gesichert · VIO-Pfad verworfen"
+            else if (nativePoseSeen)
+                "✓ Aufnahme gesichert · " + scan.poseCount() + " VIO-Positionen"
+            else "⚠ Aufnahme beendet · Keine initialisierte OpenVINS-Pose"
+            detailLabel.text = "Native RGB-/IMU-/Pose-Daten liegen in RF Lab. " +
+                "Mit KI-Tiefe / Auswertung direkt an DA3 übergeben."
+        } catch (t: Throwable) {
+            stateLabel.text = "Stoppen fehlgeschlagen: " +
+                (t.message ?: t.javaClass.simpleName)
+        }
+    }
+
+    private fun importAndAnalyze() {
+        if (recording) stopCapture()
+        processButton.isEnabled = false
+        stateLabel.text = "OpenVINS-Aufnahme wird in die RF-Lab-Galerie übernommen …"
+        worker.execute {
+            try {
+                val data = OpenVinsSessionImport(applicationContext)
+                    .importLocalLatest()
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    processButton.isEnabled = true
+                    stateLabel.text = "✓ " + data.photos + " RGB-Fotos · " +
+                        data.poses + " VIO-Posen"
+                    startActivity(Intent(this, OfflineReconstructionActivity::class.java)
+                        .putExtra("photo_session", data.session.name))
+                }
+            } catch (t: Throwable) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    processButton.isEnabled = true
+                    stateLabel.text = "Import fehlgeschlagen: " +
+                        (t.message ?: t.javaClass.simpleName)
+                    Toast.makeText(this, stateLabel.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun stopAndExit() {
+        if (recording) stopCapture()
+        setResult(RESULT_OK)
+        finish()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        healthHandler.removeCallbacks(healthTicker)
+        healthHandler.postDelayed(healthTicker,800L)
+    }
+
+    override fun onPause() {
+        healthHandler.removeCallbacks(healthTicker)
+        if (recording) stopCapture()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        healthHandler.removeCallbacks(healthTicker)
+        worker.shutdown()
+        super.onDestroy()
+    }
+}

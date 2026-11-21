@@ -9,6 +9,12 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val parallelPixelTest = providers.gradleProperty("rfLabParallelTest").orNull == "true"
+val trackingTest = providers.gradleProperty("rfLabTrackingTest").orNull == "true"
+val sourceRevision = providers.gradleProperty("rfLabSourceRevision")
+    .orElse(providers.environmentVariable("GITHUB_SHA")).orNull
+val revisionLabel = sourceRevision?.takeIf { it.matches(Regex("[0-9a-fA-F]{40}")) }?.take(8)
+
 android {
     namespace = "dev.rflab.scanner"
     compileSdk = 36
@@ -16,11 +22,24 @@ android {
         applicationId = "dev.rflab.scanner"
         minSdk = 31
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.2.1-dev"
+        versionCode = 27
+        versionName = listOfNotNull("1.3.11-qa.1", revisionLabel).joinToString("+")
+        manifestPlaceholders["rfLabLabel"] = "RF Lab"
         // Pixel 10 Pro XL: bundle only 64-bit ARM native OpenCV/LiteRT.
         ndk { abiFilters += "arm64-v8a" }
     }
+    buildTypes {
+        getByName("debug") {
+            if (trackingTest) {
+                applicationIdSuffix = ".trackingsync"
+                manifestPlaceholders["rfLabLabel"] = "RF Lab VIO Sync"
+            } else if (parallelPixelTest) {
+                applicationIdSuffix = ".pixeltest"
+                manifestPlaceholders["rfLabLabel"] = "RF Lab Test"
+            }
+        }
+    }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -39,7 +58,12 @@ kotlin {
 
 dependencies {
     implementation("com.google.ar:core:1.57.0")
-    implementation("org.opencv:opencv:4.14.0")
+    // Share the same OpenCV version and Mat ABI with native OpenVINS.
+    implementation(project(":openvins_opencv"))
+    implementation(project(":openvins_embed"))
+    // OpenVINS MainActivity is an AppCompatActivity subclass: the host
+    // compiler needs this superclass on its direct Kotlin compile classpath.
+    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.ai.edge.litert:litert:2.3.0")
     implementation("com.google.ai.edge.litert:litert-gpu:2.3.0")
     testImplementation("junit:junit:4.13.2")

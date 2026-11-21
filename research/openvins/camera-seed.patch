@@ -1,0 +1,45 @@
+--- a/app/src/main/java/com/openvins/android/Camera2ResView.kt
++++ b/app/src/main/java/com/openvins/android/Camera2ResView.kt
+@@ -174,7 +174,9 @@
+                 appendLine("possible_low_light_frame_rate_slowdown="+
+                     (auditRecentSamples>=30 &&
+                      auditRecentSlowCount>auditRecentSamples/3))
+-                appendLine("calibration_source=approximate_camera2_seed_not_kalibr")
++                val calibrationSource = if (CameraSeed.hasUserCalibration(dir))
++                    "user_calibration" else "approximate_camera2_seed_not_kalibr"
++                appendLine("calibration_source="+calibrationSource)
+                 appendLine("online_openvins_calibration_exported=false")
+                 appendLine("metric_calibration_verified=false")
+             }
+@@ -716,23 +718,14 @@
+             val intr=info.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)?:return
+             val active=info.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+                 ?:info.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?:return
+-            if(intr.size<4 || active.width()<=0 || active.height()<=0 ||
+-               mPreviewSize.width<=0 || mPreviewSize.height<=0)return
+-            val sw=active.width().toDouble()
+-            val sh=active.height().toDouble()
+-            val ratio=mPreviewSize.width.toDouble()/mPreviewSize.height
+-            val cropW=kotlin.math.min(sw,sh*ratio)
+-            val cropH=kotlin.math.min(sh,sw/ratio)
+-            val offX=(sw-cropW)/2
+-            val offY=(sh-cropH)/2
+-            val fx=intr[0]*mPreviewSize.width/cropW
+-            val fy=intr[1]*mPreviewSize.height/cropH
+-            val cx=(intr[2]-active.left-offX)*mPreviewSize.width/cropW
+-            val cy=(intr[3]-active.top-offY)*mPreviewSize.height/cropH
+-            if(fx<=0.0 || fy<=0.0)return
+-            val root=context.getExternalFilesDir(null)?:return
+-            val config=java.io.File(root,"config/kalibr_imucam_chain.yaml")
+-            if(!config.exists())return
++            val k = CameraSeed.previewIntrinsics(intr, active.width(), active.height(),
++                mPreviewSize.width, mPreviewSize.height) ?: return
++            val (fx, fy, cx, cy) = k
++            val root = context.getExternalFilesDir(null) ?: return
++            val folder = java.io.File(root, "config")
++            if (CameraSeed.hasUserCalibration(folder)) return
++            val config = java.io.File(folder, "kalibr_imucam_chain.yaml")
++            if (!config.isFile) return
+             val old=config.readText()
+             var replacement=old
+                 .replace(Regex("(?m)^  intrinsics:.*$"),

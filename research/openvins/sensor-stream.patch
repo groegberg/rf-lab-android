@@ -1,0 +1,78 @@
+--- a/app/src/main/java/com/openvins/android/MainActivity.kt
++++ b/app/src/main/java/com/openvins/android/MainActivity.kt
+@@ -36,8 +36,6 @@
+     private lateinit var sensorManager: SensorManager
+     private var sensorAccel: Sensor? = null
+     private var sensorGyro: Sensor? = null
+-    private var latestAccel: FloatArray? = null
+-    private var latestAccelNs: Long = 0L
+     private var sensorThread: android.os.HandlerThread? = null
+     private var sensorHandler: Handler? = null
+     
+@@ -282,22 +280,9 @@
+     }
+ 
+     override fun onSensorChanged(event: SensorEvent?) {
+-        if(event==null || event.values.size<3)return
+-        when(event.sensor.type) {
+-            Sensor.TYPE_ACCELEROMETER -> {
+-                latestAccel=floatArrayOf(
+-                    event.values[0],event.values[1],event.values[2])
+-                latestAccelNs=event.timestamp
+-            }
+-            Sensor.TYPE_GYROSCOPE -> {
+-                val accel=latestAccel?:return
+-                // Max 20 ms sample-and-hold; never pair arbitrarily stale IMU.
+-                if(kotlin.math.abs(event.timestamp-latestAccelNs)>20_000_000L)
+-                    return
+-                processInertialJNI(accel[0],accel[1],accel[2],
+-                    event.values[0],event.values[1],event.values[2],
+-                    event.timestamp*1e-9)
+-            }
++        val imu = TrackingSensors.accept(event) ?: return
++        while (imu.poll()) {
++            processInertialJNI(imu.ax, imu.ay, imu.az, imu.gx, imu.gy, imu.gz, imu.timeNs * 1e-9)
+         }
+     }
+ 
+--- a/app/src/main/java/com/openvins/android/Camera2ResView.kt
++++ b/app/src/main/java/com/openvins/android/Camera2ResView.kt
+@@ -814,34 +814,10 @@
+     }
+ 
+     private fun calcPreviewSize(width: Int, height: Int): Boolean {
+-        if (mCameraID == null) {
+-            Log.e(TAG, "Camera isn't initialized!")
+-            return false
+-        }
+-        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+-        try {
+-            val characteristics = manager.getCameraCharacteristics(mCameraID!!)
+-            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+-            val sizes = map!!.getOutputSizes(ImageReader::class.java)
+-            var bestSize = sizes[0]
+-            var bestDiff = Integer.MAX_VALUE
+-            for (size in sizes) {
+-                val diff = Math.abs(size.width - width) + Math.abs(size.height - height)
+-                if (diff < bestDiff && size.width <= 640 && size.height <= 480) {
+-                    bestDiff = diff
+-                    bestSize = size
+-                }
+-            }
+-            if (mPreviewSize == bestSize) {
+-                return false
+-            }
+-            mPreviewSize = bestSize
+-            Log.i(TAG, "Selected preview size: ${mPreviewSize.width}x${mPreviewSize.height}")
+-            return true
+-        } catch (e: CameraAccessException) {
+-            Log.e(TAG, "calcPreviewSize", e)
+-        }
+-        return false
++        val selected = TrackingSensors.preview(context, mCameraID) ?: Size(-1, -1)
++        if (selected == mPreviewSize) return false
++        mPreviewSize = selected
++        return true
+     }
+ 
+     override fun surfaceCreated(holder: SurfaceHolder) {

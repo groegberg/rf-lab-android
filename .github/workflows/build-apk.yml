@@ -2,17 +2,29 @@ name: Build RF Lab APK
 
 on:
   push:
-    branches: [main, feature/mobile-rgbd-v0.6, feature/ondevice-surface-v0.7, feature/mobile-quality-ui-v0.8, feature/depth-methods-v0.9, feature/camera2-capture-v1.0, fix/android-systembar-insets-v1.0.1, feature/offline-vio-da3-v1.1, experiment/openvins-live-vio-v1.2]
+    branches: [main, feature/mobile-rgbd-v0.6, feature/ondevice-surface-v0.7, feature/mobile-quality-ui-v0.8, feature/depth-methods-v0.9, feature/camera2-capture-v1.0, fix/android-systembar-insets-v1.0.1, feature/offline-vio-da3-v1.1, experiment/openvins-live-vio-v1.2, feature/embedded-openvins-v1.3]
+    paths-ignore:
+      - '.github/workflows/cleanup-actions-storage.yml'
+      - '.github/scripts/cleanup_actions_storage.py'
   pull_request:
+    paths-ignore:
+      - '.github/workflows/cleanup-actions-storage.yml'
+      - '.github/scripts/cleanup_actions_storage.py'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Each push obsoletes the previous build of the same branch; don't finish
+# expensive native NDK/APK builds which are no longer the latest tested source.
+concurrency:
+  group: rf-lab-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Set up Java
@@ -31,11 +43,18 @@ jobs:
           "$SDKMANAGER" --version
       - name: Install Android platform
         run: |
-          sdkmanager --install "platforms;android-36" "build-tools;35.0.0" "platform-tools"
+          sdkmanager --install "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;28.2.13676358" "cmake;3.22.1"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+      - name: Prepare pinned GPLv3 embedded native OpenVINS
+        run: |
+          python3 tools/bootstrap_embedded_openvins.py
+          test -f third_party/openvins_mobile/app/src/main/cpp/open_vins/ov_msckf/src/core/VioManager.cpp
+          test -f third_party/openvins_mobile/LICENSE
+      - name: Rebuild Boost for 16 KiB ARM64 Android pages
+        run: bash tools/rebuild_boost_android_16k.sh
       - name: Test RF fingerprint localization
         run: gradle --stacktrace --no-daemon :app:testDebugUnitTest
       - name: Test Alexa message contract
@@ -45,10 +64,25 @@ jobs:
       - name: Check APK
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libnative-lib.so'
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libopencv_java4.so'
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep 'assets/vio_config/estimator_config.yaml'
           sha256sum app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify bundled OpenVINS ELF dynamic runtime dependencies
+        run: python3 tools/check_android_native_dependencies.py app/build/outputs/apk/debug/app-debug.apk
+      - name: Require 16 KiB native ELF alignment
+        run: python3 tools/check_elf_16k.py app/build/outputs/apk/debug/app-debug.apk --strict
+      - name: Verify 16 KiB APK native library zip alignment
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk
       - name: Upload APK
+        # The embedded OpenVINS branch uses its private GitHub Release workflow:
+        # uploading the same ~97 MB APK to Actions hits the storage quota.
+        # Keep standard temporary artifacts for other branches only.
+        if: github.event_name != 'pull_request' && github.ref != 'refs/heads/feature/embedded-openvins-v1.3'
         uses: actions/upload-artifact@v4
         with:
           name: RF-Lab-Pixel10-Debug-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 2

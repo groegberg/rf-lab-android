@@ -1,0 +1,125 @@
+name: Publish RF Lab v1.3.7 private OpenVINS DA3 visible RGB pipeline APK
+
+# v1.3.7 release is immutable and already published. Keep manual entry only,
+# avoiding a failed duplicate release on every new v1.3.8 source commit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# The test release must match one immutable, fully verified source commit.
+concurrency:
+  group: rflab-v137-private-3d-diagnostic-release
+  cancel-in-progress: true
+
+jobs:
+  verified-private-pixel-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK, NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;28.2.13676358" "cmake;3.18.1"
+      # Previous release runner failed before checkout because the Gradle
+      # composite action tarball timed out from codeload.github.com.
+      # Fetch the official Gradle 8.13 distribution and verify its SHA256
+      # instead, avoiding dependency on a third-party action download.
+      - name: Install verified Gradle 8.13 (no GitHub action tarball)
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=https://services.gradle.org/distributions/gradle-8.13-bin.zip
+          mkdir -p "$RUNNER_TEMP/rflab-gradle"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 500 \
+            "$base" -o "$RUNNER_TEMP/rflab-gradle/gradle.zip"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --retry-delay 6 --connect-timeout 25 --max-time 120 \
+            "$base.sha256" -o "$RUNNER_TEMP/rflab-gradle/gradle.sha256"
+          (cd "$RUNNER_TEMP/rflab-gradle" && \
+            echo "$(cat gradle.sha256)  gradle.zip" | sha256sum --check)
+          unzip -q "$RUNNER_TEMP/rflab-gradle/gradle.zip" \
+            -d "$RUNNER_TEMP/rflab-gradle"
+          echo "$RUNNER_TEMP/rflab-gradle/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Prepare pinned real native GPLv3 OpenVINS and 16 KiB libraries
+        run: |
+          set -euo pipefail
+          python3 tools/bootstrap_embedded_openvins.py
+          bash tools/rebuild_boost_android_16k.sh
+      - name: Kotlin unit tests including multi-view geometry
+        run: gradle --stacktrace --no-daemon :app:testDebugUnitTest
+      - name: Validate Alexa contract
+        run: node integrations/alexa/messageFactory.test.mjs
+      - name: Assemble complete Android debug APK
+        run: gradle --stacktrace --no-daemon :app:assembleDebug
+      - name: Verify actual OpenVINS native library, dependencies and 16 KiB format
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          unzip -l "$apk" | grep 'lib/arm64-v8a/libnative-lib.so'
+          unzip -l "$apk" | grep 'lib/arm64-v8a/libopencv_java4.so'
+          unzip -l "$apk" | grep 'assets/vio_config/estimator_config.yaml'
+          python3 tools/check_android_native_dependencies.py "$apk"
+          python3 tools/check_elf_16k.py "$apk" --strict
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$apk"
+      - name: Publish PRIVATE test release directly (no Actions artifact quota)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v1.3.7-openvins-da3-visible-pipeline-private-test.1
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Immutable test release tag already exists. Refusing silent replacement."
+            exit 1
+          fi
+          apk=RF-Lab-v1.3.7-OpenVINS-DA3-Visible-RGB-Pipeline-Pixel-PRIVATE-Test.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          digest="$(sha256sum "$apk" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$digest" "$apk" | sha256sum -c -
+          cat > release-notes.txt <<EOF
+          PRIVATE INTERNAL PIXEL 10 PRO XL TEST ONLY.
+          Native GPLv3 OpenVINS MSCKF Camera2+IMU tracking and real timestamped RGB pose session.
+          On-phone Depth Anything 3-Small LiteRT inference.
+          NEW v1.3.7: Audit actual user-provided Pixel VIO trajectory drift,
+          reject physically impossible native translation before any 3D world fusion.
+          Show real camera RGB + actual DA3-Small relative depth as a colored
+          interactive 2.5D point-cloud preview after the FIRST processed photo,
+          even without independently validated camera-gyro extrinsics.
+          This single-view preview uses normalized, NONMETRIC display coordinates.
+          Never persist it as measured room geometry.
+          Where real reciprocal ORB, native ray triangulation and DA3 inverse-depth
+          alignment work but gyro extrinsic evidence remains insufficient,
+          show transient uncalibrated RGB MULTIVIEW research points (not a room map).
+          Preserve strict calibration, motion plausibility, alignment and
+          pose-association gates for the persistent OpenVINS room map.
+          Save per-photo gate reasons, image orientation and motion quality
+          statistics in offline diagnostic JSON. Detect stale VIO frame processing
+          while recording through an independent UI watchdog; avoid false alarms
+          when a scan is intentionally stopped.
+          Camera2 PRIMARY_CAMERA pose reference is NOT gyro-referenced.
+          DO NOT claim a validated metre scale, dense registered room scan,
+          physical room dimensions or loop closure. Private Pixel test only.
+          Tests/assemble/native 16 KiB/DT_NEEDED/zipalign passed in this job.
+          DO NOT distribute outside authorized private testers until combined GPLv3
+          corresponding source and third-party license obligations are reviewed.
+          Source commit: $GITHUB_SHA
+          APK SHA256: $digest
+          EOF
+          gh release create "$tag" "$apk" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "RF Lab v1.3.7 — OpenVINS VIO motion audit and visible RGB DA3 pipeline (PRIVATE Pixel test)" \
+            --notes-file release-notes.txt
+          echo "Private APK created from verified commit $GITHUB_SHA"
