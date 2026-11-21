@@ -28,7 +28,7 @@ def apply_tracking_updates() -> None:
     patches = PROJECT / "research" / "openvins"
     core = SOURCE / "app" / "src" / "main" / "cpp" / "open_vins"
     for checkout, name in ((core, "static-start.patch"), (SOURCE, "camera-pose.patch"),
-                           (SOURCE, "sensor-stream.patch")):
+                           (SOURCE, "sensor-stream.patch"), (SOURCE, "camera-seed.patch")):
         patch = str(patches / name)
         # Both a freshly pinned checkout and a previously prepared build are supported.
         if subprocess.run(["git", "apply", "--reverse", "--check", patch],
@@ -36,7 +36,7 @@ def apply_tracking_updates() -> None:
             run("git", "apply", "--check", patch, cwd=checkout)
             run("git", "apply", patch, cwd=checkout)
     java_dir = SOURCE / "app/src/main/java/com/openvins/android"
-    for name in ("ImuSynchronizer.java", "TrackingSensors.java"):
+    for name in ("ImuSynchronizer.java", "TrackingSensors.java", "CameraSeed.java"):
         shutil.copyfile(patches / "sensors" / name, java_dir / name)
     header = patches / "steady_gyro.h"
     installed = core / "ov_init" / "src" / "static" / header.name
