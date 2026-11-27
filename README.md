@@ -1,3 +1,17 @@
+# RF Lab RGB-D Scanner v0.6.0-dev (development branch)
+
+**First fully on-device development milestone:** denser ARCore Raw + Full
+Depth, corrected CPU-camera RGB mapping, confidence-aware 5-cm voxel fusion,
+and a live camera-colour / height-colour toggle.
+
+This is still a coloured point cloud, **not yet a textured metric mesh,
+AI reconstruction or Gaussian Splatting**. The v0.5.0 Smart Home features
+remain available.
+
+[Read implementation status, Pixel field test and known limitations](docs/MOBILE_RGBD_V060.md)
+
+---
+
 # RF Lab Guided Spatial Home v0.5.0
 
 **New beginner-first setup:** Camera + ARCore **live 3D room scan** → mark rooms on the scanned top-down cloud → spatial Wi-Fi, magnetic and acoustic measurements → map APs, smart lamps and plugs → plan safe simulation-only automations.

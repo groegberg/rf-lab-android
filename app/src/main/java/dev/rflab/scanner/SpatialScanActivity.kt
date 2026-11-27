@@ -23,7 +23,7 @@ import java.util.Locale
 
 /**
  * Focused scan screen. Single ARCore session -> one persistent local frame.
- * Does not claim a watertight mesh or camera-colored texture.
+ * Experimental colourised voxel preview, NOT a mesh or photogrammetry.
  */
 class SpatialScanActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
@@ -35,6 +35,7 @@ class SpatialScanActivity : Activity() {
     private lateinit var guidance: TextView
     private lateinit var start: Button
     private lateinit var finish: Button
+    private lateinit var colors: Button
     private var active = false
     private var lastMessage = "Kamera auf gut beleuchtete Flächen richten."
     private val cameraRequest = 451
@@ -85,14 +86,24 @@ class SpatialScanActivity : Activity() {
         }
         stack.addView(cameraContainer, LinearLayout.LayoutParams(-1, dp(235)))
         cameraContainer.addView(ar, LinearLayout.LayoutParams(-1, -1))
-        val label = text("3D-PUNKTWOLKE · FARBE NACH HÖHE",
+        val label = text("RGB-D-PUNKTWOLKE · KAMERAFARBEN",
             12f, Color.rgb(94, 206, 242))
         val spacer = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(11) }
         stack.addView(label, spacer)
         cloud = ScanCloudView(this).apply { store = scan }
         stack.addView(cloud, LinearLayout.LayoutParams(-1, dp(300)))
+        colors = Button(this).apply {
+            isAllCaps = false
+            text = "Ansicht: Kamerafarben"
+            setOnClickListener {
+                cloud.showCameraColors = !cloud.showCameraColors
+                text = if (cloud.showCameraColors) "Ansicht: Kamerafarben"
+                       else "Ansicht: Höhenfarben"
+            }
+        }
+        stack.addView(colors, LinearLayout.LayoutParams(-1, dp(48)))
         stats = text("", 12f, Color.WHITE)
-        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(68)))
+        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(88)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         start = Button(this).apply {
             isAllCaps = false
@@ -111,7 +122,7 @@ class SpatialScanActivity : Activity() {
         controls.addView(finish, LinearLayout.LayoutParams(0, dp(55), 1f))
         root.addView(controls)
         root.addView(text("3D-Ansicht ziehen = drehen · Zwei Finger = zoomen. " +
-            "Die Farben sind eine Höhenkodierung, keine fotografischen Oberflächenfarben. " +
+            "Kamerafarben stammen aus RGB, fehlende Farben aus der Höhenskala. " +
             "Ein Raum wird erst im nächsten Schritt im Scan markiert.",
             10.5f, Color.rgb(155, 181, 204)))
         refresh()
@@ -136,9 +147,13 @@ class SpatialScanActivity : Activity() {
         val poses = scan.poseCount()
         val points = scan.pointCount()
         val sampled = scan.sampleFrames
+        val latest = ar.latestRgbdStats
         stats.text = String.format(Locale.GERMAN,
-            "ARCore-Posen: %d · 3D-Punkte: %d · Depth-Frames: %d\n%s",
-            poses, points, sampled, lastMessage)
+            "Posen %d · Punkte %d (RGB %d / Raw %d) · Frames %d\n" +
+            "Letzter Frame: Raw %d · Full %d · RGB %d\n%s",
+            poses, points, scan.coloredPointCount(), scan.rawPointCount(), sampled,
+            latest?.rawCount ?: 0, latest?.fullCount ?: 0,
+            latest?.coloredCount ?: 0, lastMessage)
         cloud.invalidate()
         start.text = if (active) "Scan beenden"
             else if (scan.pointCount() > 0) "Neuen Scan starten" else "3D-Scan starten"
@@ -178,9 +193,9 @@ class SpatialScanActivity : Activity() {
         scan.start("ARCore-Scan " + time)
         val file = store.start()
         store.write("spatial_optical_scan", JSONObject()
-            .put("format", "ARCore raw depth sparse point cloud")
+            .put("format", "ARCore RGB-D 5cm fused point cloud v0.6")
             .put("coordinate_frame", "single ARCore session only")
-            .put("color", "height false color, not RGB texture"))
+            .put("color", "aligned camera RGB samples + height fallback; not a mesh"))
         // Surface is attached and visible. Start after one UI frame to allow GL init.
         ar.visibility = View.VISIBLE
         handler.postDelayed({
