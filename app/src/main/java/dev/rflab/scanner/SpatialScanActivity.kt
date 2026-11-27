@@ -23,7 +23,7 @@ import java.util.Locale
 
 /**
  * Focused scan screen. Single ARCore session -> one persistent local frame.
- * Does not claim a watertight mesh or camera-colored texture.
+ * Experimental colourised voxel preview, NOT a mesh or photogrammetry.
  */
 class SpatialScanActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
@@ -31,13 +31,18 @@ class SpatialScanActivity : Activity() {
     private lateinit var store: SessionStore
     private lateinit var ar: ArPoseTracker
     private lateinit var cloud: ScanCloudView
+    private lateinit var archive: RgbdKeyframeArchive
+    private lateinit var surfaceButton: Button
+    private lateinit var exportButton: Button
     private lateinit var stats: TextView
     private lateinit var guidance: TextView
     private lateinit var start: Button
     private lateinit var finish: Button
+    private lateinit var colors: Button
     private var active = false
     private var lastMessage = "Kamera auf gut beleuchtete Flächen richten."
     private val cameraRequest = 451
+    private val rgbdExportRequest = 452
     private val ticker = object : Runnable {
         override fun run() {
             refresh()
@@ -54,10 +59,12 @@ class SpatialScanActivity : Activity() {
         window.navigationBarColor = Color.rgb(10, 21, 34)
         scan = RoomScanStore(this)
         store = SessionStore(this)
+        archive = RgbdKeyframeArchive(this)
         ar = ArPoseTracker(this, this, store,
             { message -> runOnUiThread { lastMessage = message; refresh() } },
             { pose, _ -> scan.addPose(pose) },
-            { points, _ -> scan.addDepth(points) }
+            { points, _ -> scan.addDepth(points) },
+            { frame -> archive.submit(frame) }
         )
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -85,14 +92,48 @@ class SpatialScanActivity : Activity() {
         }
         stack.addView(cameraContainer, LinearLayout.LayoutParams(-1, dp(235)))
         cameraContainer.addView(ar, LinearLayout.LayoutParams(-1, -1))
-        val label = text("3D-PUNKTWOLKE · FARBE NACH HÖHE",
+        val label = text("RGB-D-PUNKTWOLKE · KAMERAFARBEN",
             12f, Color.rgb(94, 206, 242))
         val spacer = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(11) }
         stack.addView(label, spacer)
         cloud = ScanCloudView(this).apply { store = scan }
         stack.addView(cloud, LinearLayout.LayoutParams(-1, dp(300)))
+        colors = Button(this).apply {
+            isAllCaps = false
+            text = "Ansicht: Kamerafarben"
+            setOnClickListener {
+                cloud.showCameraColors = !cloud.showCameraColors
+                text = if (cloud.showCameraColors) "Ansicht: Kamerafarben"
+                       else "Ansicht: Höhenfarben"
+            }
+        }
+        stack.addView(colors, LinearLayout.LayoutParams(-1, dp(48)))
+        surfaceButton = Button(this).apply {
+            isAllCaps = false
+            text = "Kameratexturiertes 3D-Mesh ansehen"
+            setOnClickListener {
+                if (active) stopCapture(true)
+                startActivity(Intent(this@SpatialScanActivity,
+                    RgbdSurfaceViewerActivity::class.java))
+            }
+        }
+        stack.addView(surfaceButton, LinearLayout.LayoutParams(-1, dp(52)))
+        exportButton = Button(this).apply {
+            isAllCaps = false
+            text = "RGB-D-Rohdaten sichern (.zip)"
+            setOnClickListener {
+                if (active) stopCapture(true)
+                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_TITLE, "rflab_rgbd_v070_keyframes.zip")
+                }
+                startActivityForResult(intent, rgbdExportRequest)
+            }
+        }
+        stack.addView(exportButton, LinearLayout.LayoutParams(-1, dp(50)))
         stats = text("", 12f, Color.WHITE)
-        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(68)))
+        stack.addView(stats, LinearLayout.LayoutParams(-1, dp(112)))
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         start = Button(this).apply {
             isAllCaps = false
@@ -111,7 +152,7 @@ class SpatialScanActivity : Activity() {
         controls.addView(finish, LinearLayout.LayoutParams(0, dp(55), 1f))
         root.addView(controls)
         root.addView(text("3D-Ansicht ziehen = drehen · Zwei Finger = zoomen. " +
-            "Die Farben sind eine Höhenkodierung, keine fotografischen Oberflächenfarben. " +
+            "Kamerafarben stammen aus RGB, fehlende Farben aus der Höhenskala. " +
             "Ein Raum wird erst im nächsten Schritt im Scan markiert.",
             10.5f, Color.rgb(155, 181, 204)))
         refresh()
@@ -136,13 +177,20 @@ class SpatialScanActivity : Activity() {
         val poses = scan.poseCount()
         val points = scan.pointCount()
         val sampled = scan.sampleFrames
+        val latest = ar.latestRgbdStats
         stats.text = String.format(Locale.GERMAN,
-            "ARCore-Posen: %d · 3D-Punkte: %d · Depth-Frames: %d\n%s",
-            poses, points, sampled, lastMessage)
+            "Posen %d · Punkte %d (RGB %d / Raw %d) · Frames %d\n" +
+            "Raw %d · Full %d · RGB %d · Keyframes %d (+%d, ausgelassen %d)\n%s",
+            poses, points, scan.coloredPointCount(), scan.rawPointCount(), sampled,
+            latest?.rawCount ?: 0, latest?.fullCount ?: 0,
+            latest?.coloredCount ?: 0, archive.savedCount,
+            archive.pendingCount, archive.droppedCount, lastMessage)
         cloud.invalidate()
         start.text = if (active) "Scan beenden"
             else if (scan.pointCount() > 0) "Neuen Scan starten" else "3D-Scan starten"
         finish.isEnabled = points >= 50 && poses >= 3
+        surfaceButton.isEnabled = archive.savedCount > 0
+        exportButton.isEnabled = archive.savedCount > 0
     }
 
     private fun requestStart() {
@@ -175,12 +223,13 @@ class SpatialScanActivity : Activity() {
     private fun startCapture() {
         if (active) return
         val time = SimpleDateFormat("dd.MM. HH:mm", Locale.GERMAN).format(Date())
+        archive.clearForNewScan()
         scan.start("ARCore-Scan " + time)
         val file = store.start()
         store.write("spatial_optical_scan", JSONObject()
-            .put("format", "ARCore raw depth sparse point cloud")
+            .put("format", "ARCore RGB-D 5cm fused point cloud v0.6")
             .put("coordinate_frame", "single ARCore session only")
-            .put("color", "height false color, not RGB texture"))
+            .put("color", "aligned camera RGB samples + height fallback; not a mesh"))
         // Surface is attached and visible. Start after one UI frame to allow GL init.
         ar.visibility = View.VISIBLE
         handler.postDelayed({
@@ -225,6 +274,35 @@ class SpatialScanActivity : Activity() {
         }
         setResult(RESULT_OK)
         finish()
+    }
+
+    @Deprecated("Uses Android Storage Access Framework result callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != rgbdExportRequest || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        Thread({
+            try {
+                val written = contentResolver.openOutputStream(uri)?.use {
+                    archive.exportTo(it)
+                } ?: error("Export destination unavailable")
+                runOnUiThread {
+                    if (!isFinishing) Toast.makeText(this,
+                        "$written RGB-D-Keyframes exportiert.", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!isFinishing) Toast.makeText(this,
+                        "RGB-D-Export fehlgeschlagen: " + e.javaClass.simpleName,
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }, "RgbdExport").start()
+    }
+
+    override fun onDestroy() {
+        if (::archive.isInitialized) archive.shutdown()
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(code: Int,

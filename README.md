@@ -1,3 +1,33 @@
+# RF Lab v0.7.0-dev — Fully on-device RGB-D textured surfaces
+
+**New development milestone:** calibrated RGB-D keyframes with real JPEG
+camera images, raw/interpolated depth and per-frame pose; conservative
+depth triangulation; a GL ES camera-textured mesh viewer; and user-initiated
+offline ZIP export of original data.
+
+This is **not yet global TSDF fusion, pose optimisation, neural depth
+or Gaussian Splatting**. The new viewer shows individual, possibly
+overlapping frame-mesh patches rather than a globally accurate
+watertight room model. RF/Smart Home features from v0.6 stay available.
+
+[Read Pixel 10 Pro XL test instructions and limitations](docs/MOBILE_SURFACE_V070.md)
+
+---
+
+# RF Lab RGB-D Scanner v0.6.0-dev (development branch)
+
+**First fully on-device development milestone:** denser ARCore Raw + Full
+Depth, corrected CPU-camera RGB mapping, confidence-aware 5-cm voxel fusion,
+and a live camera-colour / height-colour toggle.
+
+This is still a coloured point cloud, **not yet a textured metric mesh,
+AI reconstruction or Gaussian Splatting**. The v0.5.0 Smart Home features
+remain available.
+
+[Read implementation status, Pixel field test and known limitations](docs/MOBILE_RGBD_V060.md)
+
+---
+
 # RF Lab Guided Spatial Home v0.5.0
 
 **New beginner-first setup:** Camera + ARCore **live 3D room scan** → mark rooms on the scanned top-down cloud → spatial Wi-Fi, magnetic and acoustic measurements → map APs, smart lamps and plugs → plan safe simulation-only automations.
