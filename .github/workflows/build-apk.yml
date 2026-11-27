@@ -2,7 +2,8 @@ name: Build RF Lab APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/mobile-rgbd-v0.6, feature/ondevice-surface-v0.7, feature/mobile-quality-ui-v0.8, feature/depth-methods-v0.9]
+  pull_request:
   workflow_dispatch:
 
 permissions:
