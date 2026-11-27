@@ -96,7 +96,7 @@ class SpatialSetupActivity : Activity() {
         }
         setContentView(root)
         add(root, label("RF LAB  /  SPATIAL HOME", 20f, ink, true), bottom = 3)
-        add(root, label("Deine Wohnung in fünf einfachen Schritten", 12f, muted), bottom = 10)
+        // Compact header: spatial map and scan get the screen, not explanations.
         val scroller = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
         }
@@ -135,7 +135,7 @@ class SpatialSetupActivity : Activity() {
                 navigate(i)
             }, LinearLayout.LayoutParams(-2, dp(40)).apply { marginEnd = dp(5) })
         }
-        add(body, label("SCHRITT " + (stage + 1) + " VON 5", 11.6f, accent, true), bottom = 6)
+        add(body, label((stage + 1).toString() + " / 5", 11.6f, accent, true), bottom = 4)
         when (stage) {
             0 -> scanStep()
             1 -> roomsStep()
@@ -172,39 +172,58 @@ class SpatialSetupActivity : Activity() {
     }
 
     private fun scanStep() {
-        add(body, label("Erfasse zuerst deine Wohnung", 23f, ink, true), bottom = 7)
-        add(body, label("Bewege dich langsam mit der Kamera durch die Räume. " +
-            "RF Lab erstellt aus ARCore Depth und Kameratracking eine optische 3D-Punktwolke. " +
-            "Die Messung wird bereits beim Scannen farbig dargestellt.",
-            12.8f, muted), bottom = 12)
-        val box = card(if (scan.hasScan()) "3D-SCAN GESPEICHERT" else "3D-SCAN STARTEN",
-            "Die Farben zeigen die Höhe der gemessenen Punkte, keine Foto-Textur.")
-        add(box, label(scan.pointCount().toString() + " Punkte  ·  " +
-            scan.poseCount() + " Trackingpositionen  ·  " +
-            scan.sampleFrames + " Depth-Frames", 12.5f), 9)
-        scan.bounds()?.let { b ->
-            add(box, label(String.format(Locale.GERMAN,
-                "Erfasste Ausdehnung: %.1f × %.1f × %.1f m",
-                b.width, b.depth, b.height), 11.8f, muted), 6)
-        }
-        add(box, button(if (scan.hasScan()) "3D-SCAN ANSEHEN / ERWEITERN"
-            else "KAMERA & 3D-SCAN ÖFFNEN", true) {
-            startActivityForResult(Intent(this, SpatialScanActivity::class.java), scanRequest)
-        }, 12)
-        add(body, box, bottom = 8)
-        if (scan.pointCount() > 0) scanView(false, 285)
-        val help = card("DAS PASSIERT DANACH",
-            "Nach dem Scan markierst du Räume in der Draufsicht. " +
-            "Erst danach folgen WLAN, Magnetfeld, Akustik, Geräte und Automationen.")
-        add(help, button("Vorhandene manuelle Räume verwenden") {
-            if (home.rooms.isEmpty()) toast("Noch keine manuelle Wohnungskarte vorhanden.")
-            else navigate(2)
-        }, 10)
-        add(body, help, bottom = 12)
+        add(body, label("Deine Wohnung in 3D", 22f, ink, true), bottom = 8)
+        add(body, button("●  Fotos aufnehmen · Camera2", true) {
+            startActivity(Intent(this, PhotoCaptureActivity::class.java))
+        }, bottom = 8)
         add(body, row(
-            button("Wohnung sichern") { exportBackup() },
+            button("Foto-Galerie / KI-Tiefe") {
+                startActivity(Intent(this, PhotoGalleryActivity::class.java))
+            },
+            button("ARCore-Scan (alt)") {
+                startActivityForResult(Intent(this, SpatialScanActivity::class.java),
+                    scanRequest)
+            }
+        ), bottom = 8)
+        val frames = RgbdKeyframeArchive(this).let {
+            val count = it.files().size
+            it.shutdown()
+            count
+        }
+        if (scan.pointCount() > 0) {
+            val previewDp = (resources.displayMetrics.heightPixels /
+                resources.displayMetrics.density * .48f).toInt().coerceIn(300, 650)
+            scanView(false, previewDp)
+            add(body, label(scan.pointCount().toString() + " Punkte · " +
+                scan.poseCount().toString() + " Kamerapositionen",
+                12f, muted), bottom = 10)
+        } else if (frames == 0) {
+            add(body, label("Bewege die Kamera langsam durch den Raum.",
+                13f, muted), bottom = 12)
+        }
+        if (frames > 0) {
+            add(body, button("5 Tiefenverfahren vergleichen  ›", true) {
+                startActivity(Intent(this, DepthComparisonActivity::class.java))
+            }, bottom = 10)
+            if (scan.pointCount() > 0) {
+                add(body, button("Kameratexturiertes 3D-Mesh  ›") {
+                    startActivity(Intent(this, RgbdSurfaceViewerActivity::class.java))
+                }, bottom = 9)
+            } else {
+                add(body, label(frames.toString() +
+                    " Fotos gespeichert · KI- und Foto-Stereo-Vergleich verfügbar",
+                    12f, muted), bottom = 10)
+            }
+        }
+        add(body, row(
+            button("Backup sichern") { exportBackup() },
             button("Backup laden") { importBackupDialog() }
-        ), bottom = 12)
+        ), bottom = 11)
+        if (home.rooms.isNotEmpty()) {
+            add(body, button("Vorhandene Räume verwenden") {
+                navigate(2)
+            }, bottom = 7)
+        }
     }
 
     private fun roomsStep() {

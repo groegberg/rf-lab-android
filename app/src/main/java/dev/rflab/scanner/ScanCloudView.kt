@@ -15,8 +15,8 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Interactive view of measured optical depth points, intentionally not a
- * phototextured mesh. Height -> false-color hue. Drag to orbit and pinch zoom;
+ * Interactive view of measured fused RGB-D samples, intentionally not a mesh.
+ * Camera RGB when available, otherwise height -> false-color hue.
  * orthographic floor view optionally accepts two opposite room corners.
  */
 class ScanCloudView(context: Context) : View(context) {
@@ -25,6 +25,8 @@ class ScanCloudView(context: Context) : View(context) {
     var topDown = false
         set(value) { field = value; invalidate() }
     var selectCorners = false
+    var showCameraColors = true
+        set(value) { field = value; invalidate() }
     var corner1: Pair<Float, Float>? = null
         set(value) { field = value; invalidate() }
     var onRoomCorner: ((Float, Float) -> Unit)? = null
@@ -88,10 +90,12 @@ class ScanCloudView(context: Context) : View(context) {
             fun sy(z: Float) = v.top + (z - dim.top) / dim.height() * v.height()
             paint.color = Color.rgb(22, 41, 60)
             canvas.drawRect(v, paint)
-            for (p in points) {
+            for (i in points.indices step max(1, points.size / 22_000)) {
+                val p = points[i]
                 val heightNorm = if (bounds.height > .1f)
                     ((p.y - bounds.minY) / bounds.height).coerceIn(0f, 1f) else 0f
-                paint.color = falseColor(heightNorm, p.confidence)
+                paint.color = if (showCameraColors && p.argb != 0) p.argb
+                    else falseColor(heightNorm, p.confidence)
                 canvas.drawCircle(sx(p.x + scan.originX), sy(p.z + scan.originZ),
                     1.6f * density, paint)
             }
@@ -163,10 +167,12 @@ class ScanCloudView(context: Context) : View(context) {
             canvas.drawLine(c.first, c.second, d.first, d.second, paint)
         }
         paint.style = Paint.Style.FILL
-        for (point in points) {
+        for (i in points.indices step max(1, points.size / 22_000)) {
+            val point = points[i]
             val norm = if (bounds.height > .1f)
                 ((point.y - bounds.minY) / bounds.height).coerceIn(0f, 1f) else 0f
-            paint.color = falseColor(norm, point.confidence)
+            paint.color = if (showCameraColors && point.argb != 0) point.argb
+                else falseColor(norm, point.confidence)
             val p = project(point.x, point.y, point.z)
             canvas.drawCircle(p.first, p.second, density * 1.5f, paint)
         }
@@ -185,7 +191,8 @@ class ScanCloudView(context: Context) : View(context) {
         }
         paint.style = Paint.Style.FILL
         paint.color = Color.rgb(184, 211, 228)
-        canvas.drawText("3D · Farbe = Höhe · Türkis = Kamerapfad",
+        canvas.drawText(if (showCameraColors) "3D · Kamerafarben/Höhe · Türkis = Kamerapfad"
+            else "3D · Farbe = Höhe · Türkis = Kamerapfad",
             9f * density, height - 10f * density, paint)
     }
 
