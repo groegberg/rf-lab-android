@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"/>
     <uses-feature android:name="android.hardware.wifi" android:required="false"/>
@@ -14,6 +15,12 @@
         <meta-data android:name="com.google.ar.core" android:value="optional"/>
         <activity android:name=".AcousticLabActivity" android:exported="false"/>
         <activity android:name=".SpatialScanActivity" android:exported="false"/>
+        <activity android:name=".RgbdSurfaceViewerActivity" android:exported="false"/>
+        <activity android:name=".DepthComparisonActivity" android:exported="false"/>
+        <activity android:name=".PhotoCaptureActivity" android:exported="false"/>
+        <activity android:name=".PhotoGalleryActivity" android:exported="false"/>
+        <activity android:name=".PhotoReviewActivity" android:exported="false"/>
+        <activity android:name=".OfflineReconstructionActivity" android:exported="false"/>
         <activity android:name=".MagneticLabActivity" android:exported="false"/>
         <activity android:name=".DiagnosticsActivity" android:exported="false"/>
         <activity android:name=".MainActivity" android:exported="false"/>

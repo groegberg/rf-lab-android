@@ -1,0 +1,84 @@
+name: Publish OpenVINS Pixel VIO v0.4 research APK (GPLv3)
+
+on:
+  push:
+    branches: [experiment/openvins-live-vio-v1.2]
+    paths:
+      - .github/workflows/publish-openvins-pixel-research-v04.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  standalone-openvins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for pinned fully built native VIO research APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=43817318513
+          for i in $(seq 1 120); do
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .status)"
+            if [ "$status" = completed ]; then
+              result="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq .conclusion)"
+              if [ "$result" != success ]; then
+                echo "Refusing to publish: native OpenVINS build did not pass ($result)"
+                exit 1
+              fi
+              echo "Verified native research build succeeded."
+              break
+            fi
+            if [ "$i" = 120 ]; then
+              echo "Native research build timed out; no prerelease published."
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Retrieve research APK, license and actual source patches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gh run download 43817318513 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "OpenVINS-Mobile-Pixel-Research-APK" \
+            --dir ./artifact
+          apk=artifact/openvins-mobile/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          cp "$apk" OpenVINS-Pixel-VIO-Research-v0.4.apk
+          cp artifact/openvins-mobile/LICENSE OpenVINS-GPLv3-LICENSE.txt
+          cp research/openvins_pixel_test_patch.py OpenVINS-Pixel-Calibration-Patch.py
+          cp research/openvins_record_export_patch.py OpenVINS-Pixel-Recording-Export-Patch.py
+          cp docs/OPENVINS_LIVE_VIO_V121.md OpenVINS-Pixel-Readme.md
+          unzip -l OpenVINS-Pixel-VIO-Research-v0.4.apk | grep 'lib/arm64-v8a/libnative-lib.so'
+          unzip -l OpenVINS-Pixel-VIO-Research-v0.4.apk | grep 'assets/vio_config/kalibr_imucam_chain.yaml'
+          sha256sum OpenVINS-Pixel-VIO-Research-v0.4.apk
+      - name: Publish direct separate GPLv3 APK with source provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tag="openvins-pixel-v0.4-research"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Pinned GPL research prerelease already exists."
+            exit 0
+          fi
+          gh release create "$tag" \
+            OpenVINS-Pixel-VIO-Research-v0.4.apk \
+            OpenVINS-GPLv3-LICENSE.txt \
+            OpenVINS-Pixel-Calibration-Patch.py \
+            OpenVINS-Pixel-Recording-Export-Patch.py \
+            OpenVINS-Pixel-Readme.md \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "OpenVINS Pixel v0.4 — native live VIO and RGB/pose capture (GPLv3)" \
+            --notes "SEPARATE GPLv3 research app, not part of RF Lab. Pinned upstream: goldbattle/open_vins_mobile commit f0c465695c67c0eac786f4edf83a68109a6a58a9. Genuine native OpenVINS MSCKF with initialization-checked live HUD, local 10Hz grayscale, 1Hz color JPEGs, native timestamped VIO camera pose CSV, full IMU CSV, exact YAML snapshot and user-selected ZIP export. Two modification scripts and GPLv3 license provided. Pixel camera/IMU calibration and metric accuracy NOT validated; no loop-closure correction. No root/cloud. Import this ZIP into RF Lab v1.2.1 for offline DA3. Back up existing data before changing debug builds."

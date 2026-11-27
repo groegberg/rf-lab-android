@@ -1,0 +1,55 @@
+name: Publish separate OpenVINS Pixel research APK (GPLv3)
+
+on:
+  push:
+    branches: [experiment/openvins-live-vio-v1.2]
+    paths:
+      - .github/workflows/publish-openvins-pixel-research-v02.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  direct-openvins-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download verified standalone OpenVINS VIO Android ARM64 build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gh run download 43772638083 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "OpenVINS-Mobile-Pixel-Research-APK" \
+            --dir ./research_artifact
+          apk=research_artifact/openvins-mobile/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          cp "$apk" OpenVINS-Pixel-VIO-Research-v0.2.apk
+          cp research_artifact/openvins-mobile/LICENSE OpenVINS-GPLv3-LICENSE.txt
+          cp research_artifact/research/openvins_pixel_test_patch.py OpenVINS-Pixel-Patch.py
+          unzip -l OpenVINS-Pixel-VIO-Research-v0.2.apk | grep 'lib/arm64-v8a/libnative-lib.so'
+          unzip -l OpenVINS-Pixel-VIO-Research-v0.2.apk | grep 'assets/vio_config/estimator_config.yaml'
+          sha256sum OpenVINS-Pixel-VIO-Research-v0.2.apk
+      - name: Publish directly downloadable GPLv3 research APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tag="openvins-pixel-v0.2-research"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Pinned experimental prerelease already exists"
+            exit 0
+          fi
+          gh release create "$tag" \
+            OpenVINS-Pixel-VIO-Research-v0.2.apk \
+            OpenVINS-GPLv3-LICENSE.txt OpenVINS-Pixel-Patch.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --target fed38c20c2c0782d5bc710ecf64001c38bfbda92 \
+            --prerelease \
+            --title "OpenVINS Pixel VIO — standalone GPLv3 research APK" \
+            --notes "SEPARATE GPLv3 research app; NOT RF Lab, not integrated into its license or package. Real native OpenVINS MSCKF Android VIO engine (pinned upstream public source goldbattle/open_vins_mobile commit f0c465695c67c0eac786f4edf83a68109a6a58a9, core submodule 6b4abfd2c9be2cdfbaf329efcb8d8cb219c6955f). Includes bundled example calibration YAML, real Camera2 pre-correction intrinsics and available Android lens/gyro calibration SEEDS, OIS/EIS off when supported, and private scoped storage; no PC/ADB needed. Camera/IMU extrinsics and temporal calibration are NOT validated on Pixel 10 Pro XL. Do NOT rely on output for metric room measurements. Includes GPLv3 license and complete modification script; source available via upstream public repository plus patch in this private repository. No root/cloud."

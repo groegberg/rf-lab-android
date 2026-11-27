@@ -207,6 +207,7 @@ class SpatialHomeActivity : Activity() {
         root.setBackgroundColor(background)
         root.setPadding(dp(12), dp(9), dp(12), dp(8))
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         add(root, text("RF LAB   /   SPATIAL HOME", 21f, white, true))
         add(root, text("Funkfeld · Räume · Geräte · Automationen", 11.5f, quiet), 3)
         header = text("", 11.6f, quiet)

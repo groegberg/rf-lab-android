@@ -22,7 +22,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import android.media.Image
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -39,7 +38,8 @@ class ArPoseTracker(
     private val store: SessionStore,
     private val report: (String) -> Unit,
     private val poseObserver: ((JSONObject, Long) -> Unit)? = null,
-    private val depthObserver: ((List<SurveyDepth>, Long) -> Unit)? = null
+    private val depthObserver: ((List<SurveyDepth>, Long) -> Unit)? = null,
+    private val keyframeObserver: ((RgbdKeyframeData) -> Boolean)? = null
 ) : GLSurfaceView(context), GLSurfaceView.Renderer {
 
     @Volatile private var session: Session? = null
@@ -56,6 +56,11 @@ class ArPoseTracker(
     private var cameraIntrinsicsReported = false
     private var lastDepthNs = 0L
     private var depthAvailable = false
+    private val rgbdSampler = RgbdSampler()
+    private var lastKeyframeNs = 0L
+    private var lastKeyframePose: com.google.ar.core.Pose? = null
+    @Volatile internal var latestRgbdStats: RgbdSampler.Result? = null
+        private set
     private var sweepRequested = false
     private var sweepRunning = false
     private var sweepConfigs: List<CameraConfig> = emptyList()
@@ -100,7 +105,7 @@ class ArPoseTracker(
                 return false
             }
             val newSession = Session(activity)
-            val cameraSelection = selectWidestSupportedRearCamera(newSession)
+            val cameraSelection = selectBestGeometryCamera(newSession)
             depthAvailable = depthObserver != null && !sweepRequested &&
                 newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
             if (depthAvailable) {
@@ -127,6 +132,10 @@ class ArPoseTracker(
             running = true
             lastPoseNs = 0L
             lastDepthNs = 0L
+            rgbdSampler.reset()
+            lastKeyframeNs = 0L
+            lastKeyframePose = null
+            latestRgbdStats = null
             lastFrameTimestamp = 0L
             lastTracking = ""
             cameraIntrinsicsReported = false
@@ -247,11 +256,11 @@ class ArPoseTracker(
             val now = SystemClock.elapsedRealtimeNanos()
             val camera = frame.camera
             if (sweepRunning) recordSweepFrame(frame.timestamp, camera.trackingState, now, camera.imageIntrinsics)
-            if (depthAvailable && !sweepRunning &&
+            if ((depthAvailable || keyframeObserver != null) && !sweepRunning &&
                 camera.trackingState == TrackingState.TRACKING &&
-                now - lastDepthNs > 750_000_000L) {
+                now - lastDepthNs > 250_000_000L) {
                 lastDepthNs = now
-                captureDepth(frame, camera.pose, camera.textureIntrinsics, now)
+                captureDepth(frame, now)
             }
             if (!cameraIntrinsicsReported) {
                 cameraIntrinsicsReported = true
@@ -312,146 +321,121 @@ class ArPoseTracker(
 
 
     /**
-     * ARCore only allows camera IDs in its own supported-config list.
-     * Prefer the widest rear-camera ID that Camera2 can characterize.
-     * Never use a physical camera through Camera2 while ARCore owns the session.
+     * Prefer the calibrated ARCore default lens for accurate indoor scanning.
+     * Previously auto-selecting the widest camera could reduce image detail.
+     * Only switch within the SAME camera ID to a 30-fps high-resolution CPU
+     * image if ARCore confirms that AUTOMATIC Depth remains supported.
+     * All other camera configurations remain available in diagnostics.
      */
-    private fun selectWidestSupportedRearCamera(newSession: Session): JSONObject {
-        val result = JSONObject().put("preference", "widest_ARCore_supported_rear_camera")
+    private fun selectBestGeometryCamera(newSession: Session): JSONObject {
+        val original = newSession.cameraConfig
+        val result = JSONObject()
+            .put("strategy", "main_lens_quality_first")
+            .put("default_camera_id", original.cameraId)
         try {
             val configs = newSession.getSupportedCameraConfigs(
-                CameraConfigFilter(newSession).setFacingDirection(CameraConfig.FacingDirection.BACK))
-            val cameraManager = activity.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val samples = JSONArray()
-            var best: CameraConfig? = null
-            var bestFov = Double.NEGATIVE_INFINITY
-            val defaultId = newSession.cameraConfig.cameraId
-            var defaultFov = Double.NEGATIVE_INFINITY
-            for (config in configs) {
-                val horizontalFov = try {
-                    val ch = cameraManager.getCameraCharacteristics(config.cameraId)
-                    val physical = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                    val focals = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                    if (physical != null && focals != null && focals.isNotEmpty()) {
-                        val f = focals.filter { it > 0f }.minOrNull() ?: 0f
-                        if (f > 0f) 2.0 * atan(physical.width / (2.0 * f)) * 180.0 / Math.PI
-                        else Double.NaN
-                    } else Double.NaN
-                } catch (_: Exception) { Double.NaN }
-                samples.put(arConfigSpec(config, samples.length())
-                    .put("estimated_horizontal_fov_deg", if (horizontalFov.isFinite()) horizontalFov else JSONObject.NULL))
-                if (config.cameraId == defaultId && horizontalFov.isFinite()) defaultFov = horizontalFov
-                if (horizontalFov.isFinite() && horizontalFov > bestFov) {
-                    bestFov = horizontalFov
-                    best = config
+                CameraConfigFilter(newSession)
+                    .setFacingDirection(CameraConfig.FacingDirection.BACK))
+            val candidates = configs.filter {
+                it.cameraId == original.cameraId &&
+                it.fpsRange.upper >= 30 &&
+                it.imageSize.width > 0 && it.imageSize.height > 0 &&
+                it.imageSize.width * it.imageSize.height <= 2_250_000
+            }
+            val best = candidates.maxByOrNull {
+                it.imageSize.width * it.imageSize.height
+            }
+            val defaultPixels = original.imageSize.width * original.imageSize.height
+            var upgraded = false
+            if (best != null &&
+                best.imageSize.width * best.imageSize.height > defaultPixels) {
+                try {
+                    newSession.cameraConfig = best
+                    if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                        upgraded = true
+                    } else newSession.cameraConfig = original
+                } catch (_: Exception) {
+                    newSession.cameraConfig = original
                 }
             }
-            // A wide-angle change must be significant; unknown or logical camera IDs retain ARCore's default.
-            val chooseWide = best != null && best!!.cameraId != defaultId &&
-                bestFov > (if (defaultFov.isFinite()) defaultFov + 10.0 else 90.0)
-            if (chooseWide) newSession.cameraConfig = best!!
             val selected = newSession.cameraConfig
-            result.put("supported_configs", samples)
-                .put("available_config_count", configs.size)
-                .put("default_camera_id", defaultId)
+            result.put("config_count", configs.size)
+                .put("compatible_main_lens_configs", candidates.size)
                 .put("selected_camera_id", selected.cameraId)
-                .put("wide_config_selected", chooseWide)
-                .put("selection_note", if (chooseWide) "Widest supported ARCore camera selected"
-                    else "Retaining default ARCore camera; no proven wider supported rear ID")
-            report("ARCore Kamera-ID: ${selected.cameraId}; Ultraweitwinkel ${if (chooseWide) "ausgewählt" else "nicht als separate ARCore-Kamera bestätigt"}")
+                .put("cpu_width", selected.imageSize.width)
+                .put("cpu_height", selected.imageSize.height)
+                .put("higher_resolution_selected", upgraded)
+                .put("ultrawide_auto_selected", false)
+                .put("reason", "Prefer pixel detail and stable ARCore Depth over widest FoV")
+            report("Kamera: " + selected.imageSize.width + "×" +
+                selected.imageSize.height + " · Hauptkamera, metrisches RGB-D")
         } catch (e: Exception) {
-            result.put("selection_error", e.message ?: e.javaClass.simpleName)
-            result.put("selected_camera_id", newSession.cameraConfig.cameraId)
-            report("ARCore Kameraauswahl: Standardmodus (${e.javaClass.simpleName})")
+            result.put("selection_error", e.javaClass.simpleName)
+                .put("selected_camera_id", newSession.cameraConfig.cameraId)
+            report("Kameramodus: ARCore-Standard")
         }
         return result
     }
 
 
-
-    /** Optical geometry, collected sparsely to cap memory and JSONL size. */
-    private fun captureDepth(
-        frame: com.google.ar.core.Frame,
-        cameraPose: com.google.ar.core.Pose,
-        intrinsics: CameraIntrinsics,
-        timeNs: Long
-    ) {
+    /** New raw depth plus lower-priority interpolated depth, coloured by CPU YUV. */
+    private fun captureDepth(frame: com.google.ar.core.Frame, timeNs: Long) {
         try {
-            frame.acquireRawDepthImage16Bits().use { depthImage ->
-                frame.acquireRawDepthConfidenceImage().use { confidenceImage ->
-                    val points = depthToWorld(depthImage, confidenceImage, intrinsics, cameraPose)
-                    if (points.isNotEmpty()) {
-                        val arr = JSONArray()
-                        for (p in points) arr.put(JSONArray()
-                            .put(p.x.toDouble()).put(p.y.toDouble())
-                            .put(p.z.toDouble()).put(p.confidence.toDouble()))
-                        store.write("ar_depth_points", JSONObject()
-                            .put("t_frame_ns", frame.timestamp)
-                            .put("depth_image_timestamp_ns", depthImage.timestamp)
-                            .put("width", depthImage.width)
-                            .put("height", depthImage.height)
-                            .put("method", "ARCore raw optical depth, calibrated by texture intrinsics")
-                            .put("points", arr))
-                        depthObserver?.invoke(points, timeNs)
-                    }
+            val cameraPose = frame.camera.pose
+            val previous = lastKeyframePose
+            val moved = if (previous == null) true else {
+                val dx = cameraPose.tx() - previous.tx()
+                val dy = cameraPose.ty() - previous.ty()
+                val dz = cameraPose.tz() - previous.tz()
+                dx * dx + dy * dy + dz * dz >= .18f * .18f
+            }
+            val turned = if (previous == null) true else {
+                val dot = kotlin.math.abs(
+                    cameraPose.qx() * previous.qx() +
+                    cameraPose.qy() * previous.qy() +
+                    cameraPose.qz() * previous.qz() +
+                    cameraPose.qw() * previous.qw())
+                dot < .985f
+            }
+            val elapsed = timeNs - lastKeyframeNs
+            val wantKeyframe = keyframeObserver != null &&
+                (lastKeyframeNs == 0L ||
+                    (elapsed >= 1_600_000_000L &&
+                     (moved || turned || elapsed >= 6_000_000_000L)))
+            val result = rgbdSampler.capture(frame, frame.camera, wantKeyframe) ?: return
+            result.keyframe?.let { candidate ->
+                if (keyframeObserver?.invoke(candidate) == true) {
+                    lastKeyframeNs = timeNs
+                    lastKeyframePose = cameraPose
                 }
             }
-        } catch (_: NotYetAvailableException) {
-            // Raw depth is not available on every frame; normal, especially at startup.
+            latestRgbdStats = result
+            if (result.points.isEmpty()) return
+            val arr = JSONArray()
+            // Retain bounded legacy diagnostics; complete samples reach the scan store.
+            for (p in result.points.take(240)) arr.put(JSONArray()
+                .put(p.x.toDouble()).put(p.y.toDouble())
+                .put(p.z.toDouble()).put(p.confidence.toDouble()))
+            store.write("ar_depth_points", JSONObject()
+                .put("t_frame_ns", frame.timestamp)
+                .put("raw_depth_image_timestamp_ns", result.rawTimestamp)
+                .put("full_depth_image_timestamp_ns", result.fullTimestamp)
+                .put("method", "ARCore raw + interpolated full depth, aligned camera RGB")
+                .put("raw_samples", result.rawCount)
+                .put("interpolated_samples", result.fullCount)
+                .put("colored_samples", result.coloredCount)
+                .put("stored_in_room", result.points.size)
+                .put("points", arr))
+            depthObserver?.invoke(result.points, timeNs)
         } catch (e: Exception) {
             if (timeNs - lastErrorNs > 3_000_000_000L) {
                 lastErrorNs = timeNs
                 store.write("ar_depth_error", JSONObject()
                     .put("exception", e.javaClass.simpleName)
                     .put("detail", e.message ?: ""))
-                report("Tiefenscan: " + e.javaClass.simpleName)
+                report("RGB-D: " + e.javaClass.simpleName)
             }
         }
-    }
-
-    private fun depthToWorld(
-        depth: Image, confidence: Image, intr: CameraIntrinsics,
-        pose: com.google.ar.core.Pose
-    ): List<SurveyDepth> {
-        val w = depth.width
-        val h = depth.height
-        val plane = depth.planes[0]
-        val qualityPlane = confidence.planes[0]
-        val values = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
-        val qualities = qualityPlane.buffer.duplicate()
-        val dims = intr.imageDimensions
-        val focal = intr.focalLength
-        val center = intr.principalPoint
-        if (dims[0] <= 0 || dims[1] <= 0 || focal[0] <= 0f || focal[1] <= 0f) return emptyList()
-        val fx = focal[0] * w / dims[0]
-        val fy = focal[1] * h / dims[1]
-        val cx = center[0] * w / dims[0]
-        val cy = center[1] * h / dims[1]
-        val matrix = FloatArray(16)
-        pose.toMatrix(matrix, 0)
-        val sampled = ArrayList<SurveyDepth>()
-        val stepX = kotlin.math.max(8, w / 14)
-        val stepY = kotlin.math.max(8, h / 11)
-        for (y in stepY / 2 until h step stepY) {
-            for (x in stepX / 2 until w step stepX) {
-                val index = y * plane.rowStride + x * plane.pixelStride
-                val qualityIndex = y * qualityPlane.rowStride + x * qualityPlane.pixelStride
-                if (index + 1 >= values.limit() || qualityIndex >= qualities.limit()) continue
-                val millimeters = values.getShort(index).toInt() and 0xffff
-                val q = (qualities.get(qualityIndex).toInt() and 0xff) / 255f
-                if (millimeters !in 450..8000 || q < .45f) continue
-                val z = millimeters / 1000f
-                val px = (x - cx) * z / fx
-                val py = (cy - y) * z / fy
-                val pz = -z
-                val wx = matrix[0] * px + matrix[4] * py + matrix[8] * pz + matrix[12]
-                val wy = matrix[1] * px + matrix[5] * py + matrix[9] * pz + matrix[13]
-                val wz = matrix[2] * px + matrix[6] * py + matrix[10] * pz + matrix[14]
-                if (wx.isFinite() && wy.isFinite() && wz.isFinite())
-                    sampled.add(SurveyDepth(wx, wy, wz, q))
-            }
-        }
-        return sampled
     }
 
     private fun arConfigSpec(config: CameraConfig, index: Int): JSONObject {

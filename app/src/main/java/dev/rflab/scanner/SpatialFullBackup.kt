@@ -20,7 +20,7 @@ object SpatialFullBackup {
         val result = JSONObject()
             .put("schema", "rflab-spatial-full-backup-v1")
             .put("exported_at_ms", System.currentTimeMillis())
-            .put("disclaimer", "User-calibrated map; sparse optical depth; derived sensor fingerprints")
+            .put("disclaimer", "User-calibrated map; experimental optical RGB-D; derived sensor fingerprints")
         val records = JSONObject()
         for ((key, spec) in names) {
             val file = File(context.filesDir, spec.first)
@@ -51,7 +51,7 @@ object SpatialFullBackup {
             if (key == "home" && (entry.optJSONArray("rooms") == null ||
                     entry.optJSONArray("anchors") == null ||
                     entry.optJSONArray("devices") == null)) return false
-            if (key == "scan" && (entry.optJSONArray("points")?.length() ?: 0) > 16_000)
+            if (key == "scan" && (entry.optJSONArray("points")?.length() ?: 0) > 80_000)
                 return false
             if (key == "sensors" && (entry.optJSONArray("acoustic")?.length() ?: 0) > 300)
                 return false
