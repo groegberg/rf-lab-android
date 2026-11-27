@@ -59,6 +59,7 @@ class AcousticLabActivity : Activity() {
             setBackgroundColor(Color.rgb(11, 23, 38))
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         root.addView(label("RF LAB  /  AKUSTIK", 21f))
         root.addView(label("Aktive Echo-Messung · hörbarer Chirp 1,3–6,5 kHz",
             12f, Color.rgb(168, 199, 220)))

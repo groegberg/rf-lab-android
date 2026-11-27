@@ -1,0 +1,179 @@
+package dev.rflab.scanner
+
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/**
+ * CPU triangulation of one calibrated RGB-D keyframe. Every vertex is in the
+ * SAME ARCore world frame; UVs reference the corresponding stored camera JPEG.
+ *
+ * Deliberately conservative: never bridge a missing-depth region or a large
+ * depth discontinuity. Mesh patches from multiple keyframes can overlap.
+ * This is NOT volumetric TSDF fusion and is not watertight.
+ */
+data class RgbdSurfaceMesh(
+    val positions: FloatArray,
+    val uvs: FloatArray,
+    val triangles: ShortArray,
+    val measuredVertices: Int,
+    val estimatedVertices: Int,
+    val multiviewConfirmed: Int = 0,
+    val multiviewRejected: Int = 0,
+    val planeRegularized: Int = 0
+) {
+    val vertexCount get() = positions.size / 3
+    val triangleCount get() = triangles.size / 3
+}
+
+object RgbdSurfaceMesher {
+    fun build(frame: StoredRgbdKeyframe, targetVertices: Int = 11_000,
+              neighbors: List<StoredRgbdKeyframe> = emptyList(),
+              planes: List<StructuralPlane> = emptyList()): RgbdSurfaceMesh {
+        val w = frame.width
+        val h = frame.height
+        if (w < 2 || h < 2 || !frame.fx.isFinite() || !frame.fy.isFinite() ||
+            frame.fx <= 0f || frame.fy <= 0f || frame.cameraWorld.size != 16 ||
+            frame.uvImageCorners.size != 8 ||
+            frame.fullDepth.size != w * h * 2 ||
+            frame.rawDepth.size != w * h * 2 ||
+            frame.rawConfidence.size != w * h)
+            return RgbdSurfaceMesh(floatArrayOf(), floatArrayOf(), shortArrayOf(), 0, 0)
+
+        val step = ceil(sqrt(w.toDouble() * h / targetVertices.coerceIn(256, 14_000)))
+            .toInt().coerceAtLeast(1)
+        val nx = (w + step - 1) / step
+        val ny = (h + step - 1) / step
+        if (nx * ny > 60_000) return RgbdSurfaceMesh(
+            floatArrayOf(), floatArrayOf(), shortArrayOf(), 0, 0)
+
+        val grid = IntArray(nx * ny) { -1 }
+        val pos = FloatArray(nx * ny * 3)
+        val uv = FloatArray(nx * ny * 2)
+        val distances = FloatArray(nx * ny)
+        val m = frame.cameraWorld
+        val corners = frame.uvImageCorners
+        var count = 0
+        var measured = 0
+        var estimated = 0
+        var confirmed = 0
+        var rejected = 0
+        var regularized = 0
+
+        fun millimeters(bytes: ByteArray, pixel: Int): Int {
+            val i = pixel * 2
+            return (bytes[i].toInt() and 255) or
+                ((bytes[i + 1].toInt() and 255) shl 8)
+        }
+
+        for (gy in 0 until ny) for (gx in 0 until nx) {
+            val x = min(w - 1, gx * step + step / 2)
+            val y = min(h - 1, gy * step + step / 2)
+            val pixel = y * w + x
+            val raw = millimeters(frame.rawDepth, pixel)
+            val rawValid = raw in 350..7500 &&
+                (frame.rawConfidence[pixel].toInt() and 255) >= 128
+            val full = millimeters(frame.fullDepth, pixel)
+            val d = if (rawValid) raw else full
+            if (d !in 350..7500) continue
+
+            val depth = d / 1000f
+            val px = (x - frame.cx) * depth / frame.fx
+            val py = (frame.cy - y) * depth / frame.fy
+            val pz = -depth
+            var wx = m[0] * px + m[4] * py + m[8] * pz + m[12]
+            var wy = m[1] * px + m[5] * py + m[9] * pz + m[13]
+            var wz = m[2] * px + m[6] * py + m[10] * pz + m[14]
+            if (!wx.isFinite() || !wy.isFinite() || !wz.isFinite()) continue
+
+            val evidence = if (neighbors.isNotEmpty())
+                MultiviewDepthConsistency.check(wx, wy, wz, frame, neighbors)
+                else null
+            val contradicted = if (rawValid)
+                evidence != null && evidence.rawConflicts > 0 &&
+                    evidence.rawMatches == 0
+                else evidence?.verdict ==
+                    MultiviewDepthConsistency.Result.CONTRADICTED
+            if (contradicted) {
+                rejected++
+                continue
+            }
+            if (evidence?.verdict == MultiviewDepthConsistency.Result.CONFIRMED)
+                confirmed++
+            // Large structural planes are fitted from many independent raw
+            // samples. Only estimated Full Depth may move up to 4 cm.
+            if (!rawValid && planes.isNotEmpty()) {
+                val snapped = StructuralPlaneFitter.snap(wx, wy, wz, planes)
+                if (snapped != null) {
+                    wx = snapped[0]
+                    wy = snapped[1]
+                    wz = snapped[2]
+                    regularized++
+                }
+            }
+
+            // The camera JPEG can cover a smaller crop than ARCore depth.
+            // Reject untexturable vertices instead of stretching edge colours.
+            val s = (x + .5f) / w
+            val t = (y + .5f) / h
+            fun interpolate(offset: Int): Float {
+                val top = corners[offset] * (1f - s) + corners[2 + offset] * s
+                val bottom = corners[4 + offset] * (1f - s) + corners[6 + offset] * s
+                return top * (1f - t) + bottom * t
+            }
+            val u = interpolate(0)
+            val v = interpolate(1)
+            if (!u.isFinite() || !v.isFinite() ||
+                u !in 0f..1f || v !in 0f..1f) continue
+
+            grid[gy * nx + gx] = count
+            val vi = count * 3
+            pos[vi] = wx
+            pos[vi + 1] = wy
+            pos[vi + 2] = wz
+            distances[count] = depth
+            uv[count * 2] = u
+            uv[count * 2 + 1] = v
+            count++
+            if (rawValid) measured++ else estimated++
+        }
+
+        if (count == 0) return RgbdSurfaceMesh(
+            floatArrayOf(), floatArrayOf(), shortArrayOf(), 0, 0)
+
+        val faces = ShortArray((nx - 1) * (ny - 1) * 6)
+        var faceCount = 0
+        fun compatible(a: Int, b: Int): Boolean {
+            if (a < 0 || b < 0) return false
+            val da = distances[a]
+            val db = distances[b]
+            if (abs(da - db) > max(.085f, min(da, db) * .055f)) return false
+            val ia = a * 3
+            val ib = b * 3
+            val dx = pos[ia] - pos[ib]
+            val dy = pos[ia + 1] - pos[ib + 1]
+            val dz = pos[ia + 2] - pos[ib + 2]
+            val edge = sqrt(dx * dx + dy * dy + dz * dz)
+            return edge < max(.16f, min(da, db) * .12f)
+        }
+        fun triangle(a: Int, b: Int, c: Int) {
+            if (!compatible(a, b) || !compatible(b, c) || !compatible(a, c)) return
+            faces[faceCount++] = a.toShort()
+            faces[faceCount++] = b.toShort()
+            faces[faceCount++] = c.toShort()
+        }
+        for (y in 0 until ny - 1) for (x in 0 until nx - 1) {
+            val tl = grid[y * nx + x]
+            val tr = grid[y * nx + x + 1]
+            val bl = grid[(y + 1) * nx + x]
+            val br = grid[(y + 1) * nx + x + 1]
+            triangle(tl, bl, tr)
+            triangle(tr, bl, br)
+        }
+        return RgbdSurfaceMesh(pos.copyOf(count * 3), uv.copyOf(count * 2),
+            faces.copyOf(faceCount), measured, estimated, confirmed, rejected,
+            regularized)
+    }
+}

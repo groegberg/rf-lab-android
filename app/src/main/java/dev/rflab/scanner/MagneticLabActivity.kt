@@ -55,6 +55,7 @@ class MagneticLabActivity : Activity(), SensorEventListener {
             setBackgroundColor(Color.rgb(13, 24, 37))
         }
         setContentView(root)
+        SystemBarsSafeArea.install(this, root)
         fun text(value: String, size: Float, color: Int = Color.WHITE): TextView =
             TextView(this).apply { this.text = value; textSize = size; setTextColor(color) }
         root.addView(text("RF LAB / MAGNETIC LAB", 20f))

@@ -1,3 +1,115 @@
+# RF Lab v1.1.0-dev — Offline optical/gyro odometry + Depth Anything 3
+
+**New on-device post-processing:** a 10 Hz Camera2 tracking stream is
+recorded alongside your manual/automatic original photos and full-rate
+IMU samples. After scanning, open **Fotos → Offline: Optische Posen +
+Depth Anything 3**. RF Lab now executes actual OpenCV ORB/E-matrix/RANSAC
+relative camera pose recovery with conditional calibrated gyro rotation
+priors, then batch-runs the bundled DA3 Small model on the selected photos.
+Camera timestamps link the depth maps to the relative trajectories.
+All files can be exported in the private capture ZIP.
+
+**Important:** two-view translation and single-view DA3 have unknown
+metric scales. This is an experimental offline visual/gyro odometry
+prototype, **not** already a calibrated full visual-inertial SLAM,
+loop-closed metric room scan or fused 3D mesh. Bundle adjustment,
+relocalization, true metric scaling and surface fusion remain next.
+
+[Architecture and Pixel field tests](docs/OFFLINE_VIO_DA3_V110.md)
+
+---
+
+# RF Lab v1.0.0-dev — Controlled Camera2 photo capture for future visual-inertial SLAM
+
+**New default scan acquisition:** independent Camera2 JPEG camera preview
+with a user-controlled shutter, optional sharpness/overlap-aware automatic
+capture, live independent optical feature tracking diagnostics, and a local
+photo gallery with deletion and original-data export.
+
+Each photo stores camera sensor exposure timestamp, ISO, focal length,
+available lens intrinsics/distortion, focus, rotation, optical quality,
+and timebase status. Full timestamped gyro/accelerometer streams (including
+uncalibrated sensors when available) are preserved in the exported dataset.
+
+**Depth Anything 3 Small remains bundled in the offline APK** and can be
+run directly on any photo in the gallery, without an ARCore session. The
+previous ARCore scanner is still available as an explicitly legacy option.
+
+**Accuracy boundary:** the independent optical tracker counts and matches
+2D features; it is NOT YET an independent 6DoF VIO/SLAM backend.
+No bundle adjustment, loop closure or independent metric 3D reconstruction
+is claimed. This milestone supplies controlled high-quality input data and
+timebase-safe measurements to implement those correctly.
+
+[Setup, field tests, privacy and limitations](docs/CAMERA2_VIO_V100.md)
+
+---
+
+# RF Lab v0.9.0-dev — Five depth algorithms, one room recording
+
+A new **on-device comparison laboratory** runs on the same captured room
+photos: ARCore Raw, ARCore Full, real **RGB photographic stereo**, genuine
+**Depth Anything 3 Small** (LiteRT GPU/CPU), and multi-view consistency.
+The camera-only capture fallback also works if optical depth is unavailable.
+
+Depth Anything 3 is **bundled in the APK (55 MB model)** and runs offline.
+Its single-image output is **relative depth, not meters**. RGB stereo
+does not use ARCore depth but still relies on camera poses from ARCore
+tracking. A global metric photogrammetry/TSDF pipeline and Gaussian
+Splatting are not yet implemented.
+
+[Method-by-method explanation and comparison protocol](docs/DEPTH_METHODS_V090.md)
+
+---
+
+# RF Lab v0.8.0-dev — Clean scanner + cross-view geometry checks
+
+The new **camera-first** room scanner gives the live view and spatial map
+almost the whole screen, with a small status overlay, two primary actions,
+an optional 3D mesh button and diagnostics in the overflow menu.
+
+**Geometry:** more than ARCore-only smoothing: independent reprojection
+checks against nearby RGB-D keyframes, robust structural wall/floor plane
+fits from high-confidence raw depth and conservative planar regularization.
+The default ARCore camera is preferred over automatic ultrawide selection.
+
+Still experimental: it is **not** an accurate TSDF/AI or Gaussian-Splatting
+model yet. Compare measured dimensions before using for room automation.
+
+[Implementation, limitations and Pixel 10 Pro XL field tests](docs/MOBILE_QUALITY_UI_V080.md)
+
+---
+
+# RF Lab v0.7.0-dev — Fully on-device RGB-D textured surfaces
+
+**New development milestone:** calibrated RGB-D keyframes with real JPEG
+camera images, raw/interpolated depth and per-frame pose; conservative
+depth triangulation; a GL ES camera-textured mesh viewer; and user-initiated
+offline ZIP export of original data.
+
+This is **not yet global TSDF fusion, pose optimisation, neural depth
+or Gaussian Splatting**. The new viewer shows individual, possibly
+overlapping frame-mesh patches rather than a globally accurate
+watertight room model. RF/Smart Home features from v0.6 stay available.
+
+[Read Pixel 10 Pro XL test instructions and limitations](docs/MOBILE_SURFACE_V070.md)
+
+---
+
+# RF Lab RGB-D Scanner v0.6.0-dev (development branch)
+
+**First fully on-device development milestone:** denser ARCore Raw + Full
+Depth, corrected CPU-camera RGB mapping, confidence-aware 5-cm voxel fusion,
+and a live camera-colour / height-colour toggle.
+
+This is still a coloured point cloud, **not yet a textured metric mesh,
+AI reconstruction or Gaussian Splatting**. The v0.5.0 Smart Home features
+remain available.
+
+[Read implementation status, Pixel field test and known limitations](docs/MOBILE_RGBD_V060.md)
+
+---
+
 # RF Lab Guided Spatial Home v0.5.0
 
 **New beginner-first setup:** Camera + ARCore **live 3D room scan** → mark rooms on the scanned top-down cloud → spatial Wi-Fi, magnetic and acoustic measurements → map APs, smart lamps and plugs → plan safe simulation-only automations.
