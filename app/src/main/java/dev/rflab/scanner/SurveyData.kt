@@ -24,7 +24,8 @@ data class SurveyRadio(
     val rssi: Int, val origin: String, val pose: SurveyPose?
 )
 
-data class SurveyDepth(val x: Float, val y: Float, val z: Float, val confidence: Float, val run: Int = 0)
+data class SurveyDepth(val x: Float, val y: Float, val z: Float, val confidence: Float,
+                       val run: Int = 0, val argb: Int = 0, val rawDepth: Boolean = true)
 
 data class ApStats(
     val bssid: String, var ssid: String, var frequency: Int,

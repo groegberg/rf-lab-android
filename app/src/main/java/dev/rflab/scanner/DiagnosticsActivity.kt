@@ -106,6 +106,7 @@ class DiagnosticsActivity : Activity(), SensorEventListener {
         val scroll = ScrollView(this)
         scroll.addView(root)
         setContentView(scroll)
+        SystemBarsSafeArea.install(this, scroll)
         root.addView(TextView(this).apply {
             text = "RF LAB · Pixel 10 Pro XL"
             textSize = 24f
